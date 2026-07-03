@@ -1,0 +1,123 @@
+{
+  "_comment": [
+    "Golden ledger fixtures for the Phase 4 holdings projection.",
+    "Every expected value is hand-computed:",
+    "  buy_sell_wac: buy 100@$55 + buy 100@$65 -> qty 200, cost $120, WAC 0.6;",
+    "    sell 50 releases 120*50/200=$30 -> qty 150, cost $90, WAC 0.6 unchanged.",
+    "  sell_to_flat: buy 10@$5, sell 10 -> qty 0, basis fully released, WAC 0.",
+    "  merge_reduces_both: 101: 100@$60 (WAC .6), 102: 80@$40 (WAC .5);",
+    "    MERGE 50 pairs -> 101: qty 50 cost 60-60*50/100=$30 (WAC .6),",
+    "    102: qty 30 cost 40-40*50/80=$15 (WAC .5).",
+    "  split_adds_both: SPLIT $100 -> 100 shares of each token at $50 each, WAC 0.5.",
+    "  redeem_zeroes: holds winner 101 and loser 102; REDEEM burns the entire",
+    "    condition balance -> both zero.",
+    "  same_ts_tie_id_order: all at ts=100 in insert order buy10/sell10/buy5;",
+    "    correct (ts,id) order ends qty 5 cost $3 WAC 0.6 with no negative dip;",
+    "    any other order would yield WAC 1.6 and a negative-qty warning.",
+    "  negative_not_clamped: sell 10 with no holdings -> qty -10 preserved, WAC 0.",
+    "  dust_flat: buy 10, sell 9.9999995 -> residue 5e-7 <= epsilon counts as",
+    "    flat: WAC 0, excluded by the nonzero filter.",
+    "  reward_and_unknown_no_effect: REWARD and CONVERSION never touch quantity."
+  ],
+  "conditions": {
+    "0xc1": ["101", "102"]
+  },
+  "scenarios": [
+    {
+      "name": "buy_sell_wac",
+      "wallet": "0xw1",
+      "events": [
+        {"type": "TRADE", "ts": 100, "condition_id": "0xc1", "token_id": "101", "delta_shares": "100", "delta_usdc": "-55"},
+        {"type": "TRADE", "ts": 200, "condition_id": "0xc1", "token_id": "101", "delta_shares": "100", "delta_usdc": "-65"},
+        {"type": "TRADE", "ts": 300, "condition_id": "0xc1", "token_id": "101", "delta_shares": "-50", "delta_usdc": "35"}
+      ],
+      "expected": {"101": {"qty": "150", "wac": "0.6", "as_of_ts": 300}}
+    },
+    {
+      "name": "sell_to_flat",
+      "wallet": "0xw2",
+      "events": [
+        {"type": "TRADE", "ts": 100, "condition_id": "0xc1", "token_id": "101", "delta_shares": "10", "delta_usdc": "-5"},
+        {"type": "TRADE", "ts": 200, "condition_id": "0xc1", "token_id": "101", "delta_shares": "-10", "delta_usdc": "7"}
+      ],
+      "expected": {"101": {"qty": "0", "wac": "0", "as_of_ts": 200}}
+    },
+    {
+      "name": "merge_reduces_both",
+      "wallet": "0xw3",
+      "events": [
+        {"type": "TRADE", "ts": 100, "condition_id": "0xc1", "token_id": "101", "delta_shares": "100", "delta_usdc": "-60"},
+        {"type": "TRADE", "ts": 200, "condition_id": "0xc1", "token_id": "102", "delta_shares": "80", "delta_usdc": "-40"},
+        {"type": "MERGE", "ts": 300, "condition_id": "0xc1", "delta_shares": "-50", "delta_usdc": "50"}
+      ],
+      "expected": {
+        "101": {"qty": "50", "wac": "0.6", "as_of_ts": 300},
+        "102": {"qty": "30", "wac": "0.5", "as_of_ts": 300}
+      }
+    },
+    {
+      "name": "split_adds_both",
+      "wallet": "0xw4",
+      "events": [
+        {"type": "SPLIT", "ts": 100, "condition_id": "0xc1", "delta_shares": "100", "delta_usdc": "-100"}
+      ],
+      "expected": {
+        "101": {"qty": "100", "wac": "0.5", "as_of_ts": 100},
+        "102": {"qty": "100", "wac": "0.5", "as_of_ts": 100}
+      }
+    },
+    {
+      "name": "redeem_zeroes",
+      "wallet": "0xw5",
+      "events": [
+        {"type": "TRADE", "ts": 100, "condition_id": "0xc1", "token_id": "101", "delta_shares": "100", "delta_usdc": "-70"},
+        {"type": "TRADE", "ts": 200, "condition_id": "0xc1", "token_id": "102", "delta_shares": "20", "delta_usdc": "-4"},
+        {"type": "REDEEM", "ts": 300, "condition_id": "0xc1", "delta_shares": "-100", "delta_usdc": "0"}
+      ],
+      "expected": {
+        "101": {"qty": "0", "wac": "0", "as_of_ts": 300},
+        "102": {"qty": "0", "wac": "0", "as_of_ts": 300}
+      }
+    },
+    {
+      "name": "same_ts_tie_id_order",
+      "wallet": "0xw6",
+      "events": [
+        {"type": "TRADE", "ts": 100, "condition_id": "0xc1", "token_id": "101", "delta_shares": "10", "delta_usdc": "-5"},
+        {"type": "TRADE", "ts": 100, "condition_id": "0xc1", "token_id": "101", "delta_shares": "-10", "delta_usdc": "6"},
+        {"type": "TRADE", "ts": 100, "condition_id": "0xc1", "token_id": "101", "delta_shares": "5", "delta_usdc": "-3"}
+      ],
+      "expected": {"101": {"qty": "5", "wac": "0.6", "as_of_ts": 100}},
+      "expected_negative_qty_events": 0
+    },
+    {
+      "name": "negative_not_clamped",
+      "wallet": "0xw7",
+      "events": [
+        {"type": "TRADE", "ts": 100, "condition_id": "0xc1", "token_id": "101", "delta_shares": "-10", "delta_usdc": "6"}
+      ],
+      "expected": {"101": {"qty": "-10", "wac": "0", "as_of_ts": 100}},
+      "expected_negative_qty_events": 1,
+      "expected_negative_qty_tokens": 1
+    },
+    {
+      "name": "dust_flat",
+      "wallet": "0xw8",
+      "events": [
+        {"type": "TRADE", "ts": 100, "condition_id": "0xc1", "token_id": "101", "delta_shares": "10", "delta_usdc": "-5"},
+        {"type": "TRADE", "ts": 200, "condition_id": "0xc1", "token_id": "101", "delta_shares": "-9.9999995", "delta_usdc": "6"}
+      ],
+      "expected": {"101": {"qty": "0.0000005", "wac": "0", "as_of_ts": 200}}
+    },
+    {
+      "name": "reward_and_unknown_no_effect",
+      "wallet": "0xw9",
+      "events": [
+        {"type": "TRADE", "ts": 100, "condition_id": "0xc1", "token_id": "101", "delta_shares": "10", "delta_usdc": "-5"},
+        {"type": "REWARD", "ts": 200, "delta_shares": "0", "delta_usdc": "1.23"},
+        {"type": "CONVERSION", "ts": 300, "condition_id": "0xc1", "delta_shares": "0", "delta_usdc": "0"}
+      ],
+      "expected": {"101": {"qty": "10", "wac": "0.5", "as_of_ts": 100}}
+    }
+  ]
+}

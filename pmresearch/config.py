@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 
 
@@ -18,6 +19,9 @@ class Settings:
     log_level: str
     rpc_url: str
     rclone_remote: str
+    # Holdings below this many shares (absolute) count as flat — the source
+    # reports 6-decimal sizes, so anything under 1e-6 is rounding residue.
+    dust_epsilon: Decimal = Decimal("0.000001")
 
     @property
     def db_dir(self) -> Path:
@@ -54,6 +58,7 @@ def get_settings() -> Settings:
         log_level=_env("PMR_LOG_LEVEL", "INFO"),
         rpc_url=_env("PMR_RPC_URL", ""),
         rclone_remote=_env("PMR_RCLONE_REMOTE", ""),
+        dust_epsilon=Decimal(_env("PMR_DUST_EPSILON", "0.000001")),
     )
 
 

@@ -16,6 +16,7 @@ Todos los comandos aceptan `--help` para ver la ayuda integrada.
 | `PMR_LOG_LEVEL` | `INFO` | Nivel de logging. |
 | `PMR_RPC_URL` | vacio | URL RPC disponible para componentes que la requieran. |
 | `PMR_RCLONE_REMOTE` | vacio | Remote de rclone para operaciones externas de backup/sync. |
+| `PMR_DUST_EPSILON` | `0.000001` | Umbral de "dust": holdings con cantidad absoluta menor o igual se consideran planos (flat). |
 
 ## Comandos
 
@@ -41,6 +42,8 @@ Todos los comandos aceptan `--help` para ver la ayuda integrada.
 | `pmr fees schedules` | ninguno | Muestra los schedules de fees configurados; si hace falta, siembra defaults. |
 | `pmr fees compute` | `--wallet TEXT`: limita a una wallet | Calcula estimaciones de fees por trade y muestra cobertura/totales. |
 | `pmr fees report` | `--wallet TEXT`: requerido; `--by-category`: agrupa por categoria; `--pre-post-sports-fee`: separa antes/despues de `2026-03-30` | Genera reporte de atribucion de fees, PnL bruto/neto estimado, ROI y cobertura para una wallet. |
+| `pmr replay holdings` | `--wallet TEXT`: limita a una wallet; sin flag corre para todas las wallets del ledger | Reconstruye la proyeccion `holdings` (cantidad actual + WAC por wallet x token) replayeando `wallet_events` en orden `(ts, id)`. Reporta warnings de calidad de datos (cantidades negativas, condiciones sin metadata de tokens). |
+| `pmr holdings show` | `--wallet TEXT`: requerido; `--nonzero`: solo holdings por encima del dust epsilon | Muestra la proyeccion de holdings con metadata de mercado (pregunta y outcome) cuando existe. |
 
 ## Flujos comunes
 
@@ -51,4 +54,6 @@ pmr sync backfill 0x...
 pmr ingest run --wallet 0x...
 pmr markets sync --all
 pmr fees report --wallet 0x... --by-category --pre-post-sports-fee
+pmr replay holdings --wallet 0x...
+pmr holdings show --wallet 0x... --nonzero
 ```
