@@ -5,10 +5,12 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 
 import click
+from sqlalchemy.exc import OperationalError
 from sqlalchemy import text
 
 from ..config import ensure_data_dirs, get_settings
 from ..db.engine import get_session_factory
+from ..fees.estimate import compute_fee_estimates
 from ..ingest.runner import reparse_wallet, run_ingest
 from ..logging_setup import setup_logging
 
@@ -103,6 +105,26 @@ def _roi_on_buy_volume(totals: dict[str, Decimal]) -> Decimal | None:
     return totals["pnl"] / totals["buy"]
 
 
+def _post_cutoff_fee_scenario(session, wallet: str | None) -> dict[str, Decimal | int]:
+    compute_fee_estimates(session, wallet=wallet)
+    query = (
+        "SELECT fe.estimated_fee, fe.worst_case_fee "
+        "FROM fee_estimates fe "
+        "JOIN wallet_events we ON we.id = fe.event_id "
+        "WHERE we.event_type = 'TRADE' AND we.ts >= :cutoff"
+    )
+    params: dict[str, object] = {"cutoff": SPORTS_FEE_CUTOFF_TS}
+    if wallet:
+        query += " AND lower(we.wallet) = lower(:wallet)"
+        params["wallet"] = wallet
+    rows = session.execute(text(query), params).fetchall()
+    return {
+        "trades": len(rows),
+        "estimated_fee": sum((_decimal(row.estimated_fee) for row in rows), Decimal("0")),
+        "worst_case_fee": sum((_decimal(row.worst_case_fee) for row in rows), Decimal("0")),
+    }
+
+
 @click.group("ingest")
 def ingest_group() -> None:
     """Parse Raw Store activity payloads into the wallet_events ledger."""
@@ -152,7 +174,7 @@ def ledger_group() -> None:
 @click.option(
     "--open-value",
     default="0",
-    help="USDC value of open positions to include in PnL. Default: 0.",
+    help="USDC value of open positions to include in gross/base PnL. Default: 0.",
 )
 def ledger_stats(wallet: str | None, open_value: str) -> None:
     try:
@@ -179,6 +201,17 @@ def ledger_stats(wallet: str | None, open_value: str) -> None:
         if wallet:
             detail_query += " WHERE wallet = :w"
         detail_rows = session.execute(text(detail_query), params).fetchall()
+
+        fee_scenario = None
+        fee_scenario_unavailable = None
+        try:
+            fee_scenario = _post_cutoff_fee_scenario(session, wallet)
+        except OperationalError as exc:
+            session.rollback()
+            if "no such table:" in str(exc):
+                fee_scenario_unavailable = "run `pmr db upgrade` to enable fee estimates"
+            else:
+                fee_scenario_unavailable = str(exc)
     finally:
         session.close()
     if not rows:
@@ -189,7 +222,7 @@ def ledger_stats(wallet: str | None, open_value: str) -> None:
 
     totals = _ledger_totals(detail_rows, open_value=open_value_decimal)
     click.echo("")
-    click.echo("USDC totals:")
+    click.echo("Gross/base ledger USDC totals (fees not applied):")
     click.echo(f"TRADE BUY total       {_fmt_usdc(totals['buy'])}")
     click.echo(f"TRADE SELL total      {_fmt_usdc(totals['sell'])}")
     click.echo(f"REDEEM total          {_fmt_usdc(totals['redeem'])}")
@@ -200,10 +233,10 @@ def ledger_stats(wallet: str | None, open_value: str) -> None:
     click.echo(f"SPLIT total           {_fmt_usdc(totals['split'])}")
     click.echo(f"OPEN_VALUE            {_fmt_usdc(totals['open_value'])}")
     click.echo("")
-    click.echo(f"PnL                   {_fmt_usdc(totals['pnl'])}")
+    click.echo(f"Gross/base PnL        {_fmt_usdc(totals['pnl'])}")
 
     click.echo("")
-    click.echo("Fee-regime periods:")
+    click.echo("Sports fee date periods (gross/base only; fees not applied):")
     for index, (period_name, start_ts, end_ts) in enumerate(FEE_PERIODS, start=1):
         period_rows = _period_rows(detail_rows, start_ts, end_ts)
         period_totals = _ledger_totals(period_rows, open_value=Decimal("0"))
@@ -226,11 +259,34 @@ def ledger_stats(wallet: str | None, open_value: str) -> None:
         click.echo(f"TAKER_REBATE total    {_fmt_usdc(period_totals['taker_rebate'])}")
         click.echo(f"MAKER_REBATE total    {_fmt_usdc(period_totals['maker_rebate'])}")
         click.echo(f"SPLIT total           {_fmt_usdc(period_totals['split'])}")
-        click.echo(f"PnL                   {_fmt_usdc(period_totals['pnl'])}")
-        click.echo(f"ROI on BUY volume     {_fmt_roi(roi)}")
+        click.echo(f"Gross/base PnL        {_fmt_usdc(period_totals['pnl'])}")
+        click.echo(f"Gross/base ROI on BUY volume {_fmt_roi(roi)}")
         click.echo("event counts by type:")
         if not period_counts:
             click.echo("  none")
         else:
             for event_type in sorted(period_counts):
                 click.echo(f"  {event_type:15s} {period_counts[event_type]}")
+
+    post_rows = _period_rows(detail_rows, SPORTS_FEE_CUTOFF_TS, None)
+    post_totals = _ledger_totals(post_rows, open_value=Decimal("0"))
+    click.echo("")
+    click.echo("Estimated fee scenario:")
+    click.echo(
+        "Scope: post 2026-03-30 trades only; schedule-based taker assumption, "
+        "not actual net PnL. wallet_events gross/base PnL above is unchanged."
+    )
+    if fee_scenario_unavailable:
+        click.echo(f"unavailable={fee_scenario_unavailable}")
+    else:
+        estimated_fee = fee_scenario["estimated_fee"] if fee_scenario else Decimal("0")
+        worst_case_fee = fee_scenario["worst_case_fee"] if fee_scenario else Decimal("0")
+        trades = fee_scenario["trades"] if fee_scenario else 0
+        click.echo(f"post_2026_03_30_trades_with_fee_rows {trades}")
+        click.echo(f"post_2026_03_30_gross_base_pnl     {_fmt_usdc(post_totals['pnl'])}")
+        click.echo(f"estimated_fee_after_2026_03_30     {_fmt_usdc(estimated_fee)}")
+        click.echo(f"worst_case_fee_after_2026_03_30    {_fmt_usdc(worst_case_fee)}")
+        click.echo(
+            f"estimated_net_pnl_after_fee         "
+            f"{_fmt_usdc(post_totals['pnl'] - estimated_fee)}"
+        )

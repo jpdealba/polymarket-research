@@ -6,8 +6,11 @@ from sqlalchemy import text
 from pmresearch.exposure.descriptors import derive_structure_type
 from pmresearch.ingest.markets import (
     MarketSyncStats,
+    derive_category,
+    event_ids_for_conditions,
     ledger_condition_ids,
     missing_market_count,
+    upsert_event_category,
     upsert_market_payloads,
 )
 from pmresearch.rawstore.store import RawStore
@@ -223,6 +226,21 @@ def test_markets_sync_falls_back_to_closed_true_per_batch(settings, session):
     seen_closed = []
 
     def handler(request):
+        if request.url.path == "/events":
+            ids = request.url.params.get_list("id")
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": event_id,
+                        "title": "Fixture event",
+                        "slug": f"event-{event_id}",
+                        "negRisk": False,
+                        "tags": [{"label": "Sports"}],
+                    }
+                    for event_id in ids
+                ],
+            )
         closed = request.url.params["closed"]
         seen_closed.append(closed)
         ids = request.url.params.get_list("condition_ids")
@@ -255,6 +273,8 @@ def test_markets_sync_falls_back_to_closed_true_per_batch(settings, session):
     assert stats.markets_upserted == 2
     assert stats.missing_conditions == 0
     assert session.execute(text("SELECT COUNT(*) FROM markets")).scalar() == 2
+    categories = session.execute(text("SELECT category FROM markets")).fetchall()
+    assert [row.category for row in categories] == ["Sports", "Sports"]
 
 
 def test_gamma_uses_repeated_plain_condition_ids(settings, session):
@@ -401,3 +421,38 @@ def test_gamma_batches_can_be_upserted_incrementally_and_idempotently(settings, 
         text("SELECT COUNT(*) FROM raw_fetches WHERE source = 'gamma'")
     ).scalar()
     assert raw_count == 2
+
+
+def test_derive_category_skips_non_canonical_tags_and_keeps_order():
+    assert derive_category(
+        [{"label": "exchange"}, {"label": "Crypto"}, {"label": "Featured"}]
+    ) == "Crypto"
+    assert derive_category([{"label": "Featured"}, {"label": "exchange"}]) is None
+    assert derive_category([]) is None
+
+
+def test_upsert_event_category_propagates_to_markets(session):
+    upsert_market_payloads(
+        session,
+        ([_market(COND_BINARY, outcomes=("Yes", "No"), token_ids=("101", "102"))],),
+        [COND_BINARY],
+    )
+    assert event_ids_for_conditions(session, [COND_BINARY]) == ["100"]
+
+    updated = upsert_event_category(
+        session,
+        {
+            "id": "100",
+            "title": "Fixture event",
+            "slug": "event-100",
+            "negRisk": False,
+            "tags": [{"label": "France"}, {"label": "Politics"}],
+        },
+    )
+    session.commit()
+
+    assert updated == 1
+    row = session.execute(
+        text("SELECT category FROM markets WHERE condition_id = :cid"), {"cid": COND_BINARY}
+    ).fetchone()
+    assert row.category == "Politics"

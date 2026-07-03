@@ -9,8 +9,10 @@ from ..config import ensure_data_dirs, get_settings
 from ..db.engine import get_session_factory
 from ..ingest.markets import (
     MarketSyncStats,
+    event_ids_for_conditions,
     ledger_condition_ids,
     missing_market_count,
+    upsert_event_category,
     upsert_market_payloads,
 )
 from ..logging_setup import setup_logging
@@ -30,6 +32,8 @@ def _sync_condition_ids(
     missing: list[str] = []
     batches = 0
 
+    categorized_markets = 0
+
     for open_batch in source.fetch_market_batches_by_condition_ids(
         raw_store, requested, closed=False
     ):
@@ -40,6 +44,10 @@ def _sync_condition_ids(
         markets_upserted += open_stats.markets_upserted
         tokens_upserted += open_stats.tokens_upserted
         events_upserted += open_stats.events_upserted
+        categorized_markets += _sync_categories(
+            session, source, raw_store, list(open_batch.requested_ids)
+        )
+        session.commit()
         if open_batch.payload or batches == 1 or batches % 50 == 0:
             click.echo(
                 f"Batch {batches} closed=false: "
@@ -47,7 +55,7 @@ def _sync_condition_ids(
                 f"Gamma rows {len(open_batch.payload)}, "
                 f"upserted +{open_stats.markets_upserted}; "
                 f"totals requested {len(requested)}, "
-                f"markets {markets_upserted}."
+                f"markets {markets_upserted}, categorized {categorized_markets}."
             )
 
         if not open_batch.missing_ids:
@@ -63,6 +71,10 @@ def _sync_condition_ids(
             markets_upserted += closed_stats.markets_upserted
             tokens_upserted += closed_stats.tokens_upserted
             events_upserted += closed_stats.events_upserted
+            categorized_markets += _sync_categories(
+                session, source, raw_store, list(closed_batch.requested_ids)
+            )
+            session.commit()
             missing.extend(closed_batch.missing_ids)
             if closed_batch.payload or batches % 50 == 0:
                 click.echo(
@@ -74,6 +86,8 @@ def _sync_condition_ids(
                     f"markets {markets_upserted}, missing {len(missing)}."
                 )
 
+    click.echo(f"Categorized {categorized_markets} markets total.")
+
     return MarketSyncStats(
         requested_conditions=len(requested),
         markets_upserted=markets_upserted,
@@ -81,6 +95,20 @@ def _sync_condition_ids(
         events_upserted=events_upserted,
         missing_conditions=len(set(missing)),
     )
+
+
+def _sync_categories(
+    session, source: GammaSource, raw_store: RawStore, condition_ids: list[str]
+) -> int:
+    event_ids = event_ids_for_conditions(session, condition_ids)
+    if not event_ids:
+        return 0
+
+    categorized = 0
+    for payload in source.fetch_events_by_ids(raw_store, event_ids).payloads:
+        for event in payload:
+            categorized += upsert_event_category(session, event)
+    return categorized
 
 
 @click.group("markets")

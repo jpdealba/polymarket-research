@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from ..exposure.descriptors import derive_structure_type
@@ -116,6 +116,62 @@ def _upsert_event(session: Session, event: dict | None, *, fallback_neg_risk: bo
     return True
 
 
+# Canonical top-level categories, matched in the order Gamma lists an event's
+# tags. Gamma tags mix broad categories with narrow topical tags (e.g. a
+# Kraken IPO event carries ["Crypto", "exchange", "Finance", "Business", ...])
+# with no field marking which tag is the "primary" one, so we pick the first
+# tag that matches this allowlist.
+_CANONICAL_CATEGORIES = [
+    "Politics",
+    "Sports",
+    "Crypto",
+    "Business",
+    "Culture",
+    "Science",
+    "World",
+    "Elections",
+    "Tech",
+    "Entertainment",
+    "Economy",
+    "Finance",
+]
+_CANONICAL_CATEGORY_LOOKUP = {label.lower(): label for label in _CANONICAL_CATEGORIES}
+
+
+def derive_category(tags: list[dict]) -> str | None:
+    for tag in tags:
+        label = tag.get("label") if isinstance(tag, dict) else None
+        if not label:
+            continue
+        canonical = _CANONICAL_CATEGORY_LOOKUP.get(str(label).lower())
+        if canonical:
+            return canonical
+    return None
+
+
+def upsert_event_category(session: Session, event: dict) -> int:
+    """Upsert a fully-populated Gamma event (with tags) and propagate its
+    derived category to every market that belongs to it. Returns the number
+    of markets updated."""
+    if not _upsert_event(session, event):
+        return 0
+
+    event_id = str(event["id"])
+    category = derive_category(event.get("tags") or [])
+    result = session.execute(
+        text(
+            "UPDATE markets SET category = :category, updated_at = :updated_at "
+            "WHERE event_id = :event_id"
+        ),
+        {
+            "category": category,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "event_id": event_id,
+        },
+    )
+    return result.rowcount or 0
+
+
 def upsert_market(session: Session, market: dict) -> tuple[int, int, int]:
     condition_id = market.get("conditionId") or market.get("condition_id")
     if not condition_id:
@@ -164,7 +220,8 @@ def upsert_market(session: Session, market: dict) -> tuple[int, int, int]:
             ":outcomes_json, :clob_token_ids_json, :start_date, :end_date, :closed, "
             ":resolution_prices_json, :closed_time, :structure_type, :updated_at) "
             "ON CONFLICT(condition_id) DO UPDATE SET "
-            "question = excluded.question, slug = excluded.slug, category = excluded.category, "
+            "question = excluded.question, slug = excluded.slug, "
+            "category = COALESCE(excluded.category, markets.category), "
             "event_id = excluded.event_id, neg_risk = excluded.neg_risk, "
             "outcomes_json = excluded.outcomes_json, "
             "clob_token_ids_json = excluded.clob_token_ids_json, "
@@ -214,6 +271,20 @@ def ledger_condition_ids(session: Session, *, missing_only: bool = False) -> lis
         )
     query += " ORDER BY condition_id"
     return [row.condition_id for row in session.execute(text(query)).fetchall()]
+
+
+def event_ids_for_conditions(session: Session, condition_ids: list[str]) -> list[str]:
+    normalized = sorted({condition_id.lower() for condition_id in condition_ids if condition_id})
+    if not normalized:
+        return []
+    rows = session.execute(
+        text(
+            "SELECT DISTINCT event_id FROM markets "
+            "WHERE condition_id IN :condition_ids AND event_id IS NOT NULL"
+        ).bindparams(bindparam("condition_ids", expanding=True)),
+        {"condition_ids": normalized},
+    ).fetchall()
+    return [row.event_id for row in rows]
 
 
 def missing_market_count(session: Session) -> int:

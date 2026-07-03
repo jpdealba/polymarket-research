@@ -110,6 +110,7 @@ Conventions used below:
 - [x] Golden ingest, overlap, idempotency, reparse, progress-commit, and sign-convention tests.
 - [x] Explicit regression test: multiple legitimate fills in one transaction are preserved.
 - [ ] Manual RN1 spot-check against Polymarket UI/raw JSON when live RN1 data is refreshed locally.
+
 - ~~Projection/replay logic~~ — belongs to Phase 4.
 - ~~Market metadata sync~~ — belongs to Phase 3.
 
@@ -169,7 +170,8 @@ If uniqueness is ambiguous, preserve the events and let reconciliation catch iss
 - [x] `pmr markets sync` and `pmr markets stats`.
 - [x] Hourly scheduler jobs for `markets_refresh` and `resolution_sweep`.
 - [x] Tests for binary, negRisk event member, team-name outcomes, resolution parsing, idempotent upsert, Raw Store persistence, and missing-market detection.
-- [ ] Manual RN1 `pmr markets sync`/`pmr markets stats` verification after local RN1 ledger data is available/current.
+- [x] Manual RN1 `pmr markets sync`/`pmr markets stats` verification after local RN1 ledger data is available/current.
+
 - ~~Outcome-label based structure inference~~ — explicitly disallowed.
 - ~~Fee attribution / gross-vs-net PnL~~ — moved to Phase 3.5.
 - ~~Holdings/open-position market refresh~~ — the open-holdings side depends on Phase 4 holdings.
@@ -271,6 +273,8 @@ Calcular estimated_fee como dato explicativo.
 - Mixing rewards/rebates with trading PnL.
 
 ---
+
+
 
 ## Phase 4 — Ledger replay: current token holdings
 
@@ -524,7 +528,7 @@ Calcular estimated_fee como dato explicativo.
 
 **Acceptance criteria:** all listed features computed for 3 wallets (or NULL with reason); per-category scopes present; every value reproducible; features carry version; no feature reads raw API data directly (projections only).
 
-**Common failure modes:** division-by-zero wallets (new/empty scopes); survivorship in calibration (only resolved markets count; unresolved excluded, not assumed lost); maker_share computed over unenriched periods (must be conditioned on coverage window); category from Gamma missing (bucket "unknown", don't drop).
+**Common failure modes:** division-by-zero wallets (new/empty scopes); survivorship in calibration (only resolved markets count; unresolved excluded, not assumed lost); maker_share computed over unenriched periods (must be conditioned on coverage window); category derived from the event's Gamma tags via a canonical allowlist (`pmresearch/ingest/markets.py::derive_category`) can still be null when no tag matches — bucket "unknown", don't drop.
 
 **Prompt:** `Implement Phase 13 of IMPLEMENTATION_PLAN.md exactly as scoped. Every feature is a pure function over projections with a hand-computed golden test; NULL-with-reason when uncomputable. Show me RN1's fingerprint, its sports-scope fingerprint, and a 3-wallet comparison. Commit when acceptance criteria pass.`
 
@@ -662,3 +666,4 @@ Then:
 3. Confirm the acceptance criteria checklist for Phase 0 one by one.
 4. Commit with a clear message and push.
 ```
+
