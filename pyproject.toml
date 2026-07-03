@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pmresearch"
+version = "0.1.0"
+description = "Polymarket wallet research platform — core library and CLI."
+requires-python = ">=3.12"
+dependencies = [
+    "sqlalchemy>=2.0,<3.0",
+    "alembic>=1.13,<2.0",
+    "click>=8.1,<9.0",
+    "apscheduler>=3.10,<4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+pmr = "pmresearch.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["pmresearch*"]

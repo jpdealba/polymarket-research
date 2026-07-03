@@ -23,6 +23,8 @@ Conventions used below:
 
 ---
 
+
+
 ## Phase 0 — Repo scaffold, package, Compose, /data, SQLite/Alembic, config, logging, backup/restore
 
 **Goal:** a bootable skeleton where the container is provably disposable and the data provably isn't.
@@ -30,6 +32,7 @@ Conventions used below:
 **Scope:** project scaffold; installable `pmresearch` package with CLI; config and logging; Alembic wired to SQLite under `/data`; Docker Compose with host-mounted `/data`; backup/restore scripts; test harness. No external API calls yet.
 
 **Files/modules:**
+
 - `pyproject.toml` (package `pmresearch`, console script `pmr`), `.gitignore`, `Makefile` (`make test`, `make up`, `make backup`)
 - `pmresearch/config.py` — env-first settings (`PMR_DATA_DIR` default `/data`, DB path, log level, optional keys as empty defaults)
 - `pmresearch/logging_setup.py` — stdlib logging, console + rotating file under `/data/logs/`
@@ -57,6 +60,8 @@ Conventions used below:
 
 ---
 
+
+
 ## Phase 1 — Data-API /activity adapter, Raw Store, Wallet Manager, watchlist, backfill, incremental sync
 
 **Goal:** for any watchlist wallet, the platform can fetch its complete `/activity` history and keep it current — with every response stored verbatim first.
@@ -64,6 +69,7 @@ Conventions used below:
 **Scope:** Data-API source adapter (activity only); raw snapshot persistence + index; watchlist CRUD; Wallet Manager scheduling backfill/incremental; sync state tracking; APScheduler jobs wired in the collector. **No parsing into the ledger yet** (Phase 2).
 
 **Files/modules:**
+
 - `pmresearch/sources/base.py` — adapter contract: fetch → persist raw → return raw_fetch ids; shared httpx client, retry/backoff (429/5xx), rate-limit config
 - `pmresearch/sources/dataapi.py` — `/activity` windowed fetcher: descending pages within `[start, end)`; on offset-cap error or 3000 rows reached, split the window and recurse; `sortDirection`, `limit=500` paging (verified params per ADR 0001)
 - `pmresearch/rawstore/store.py` — write gzipped payload to `/data/raw/dataapi/activity/{wallet}/{utc_ts}_{content_hash8}.json.gz`; insert `raw_fetches` row; skip write if identical content_hash already indexed for same params
@@ -78,7 +84,7 @@ Conventions used below:
 
 **Tests:** window-splitting logic against a fake transport that enforces the 3000 cap (assert full coverage, no infinite recursion, no gaps: union of fetched windows == requested range); backoff on 429; raw store dedupe by content hash; sync_state transitions (new → backfilling → complete → incremental; failure increments counter); wallet add/remove idempotency.
 
-**Manual verification:** `pmr wallet add 0xe9076a87c5ed90ef16e6fe6529c943baeca0cff6` (RN1); `pmr sync backfill` → watch raw files accumulate under `/data/raw/`; spot-check one gzip against the live API; `pmr sync status` shows backfill_complete; run `pmr sync incremental` twice — second run fetches only the new window and writes nothing if content identical.
+**Manual verification:** `pmr wallet add 0x2005d16a84ceefa912d4e380cd32e7ff827875ea` (RN1); `pmr sync backfill` → watch raw files accumulate under `/data/raw/`; spot-check one gzip against the live API; `pmr sync status` shows backfill_complete; run `pmr sync incremental` twice — second run fetches only the new window and writes nothing if content identical.
 
 **Acceptance criteria:** RN1 fully backfilled (raw files span from wallet's first activity to now, verified by earliest/latest timestamps in payloads); re-running backfill is a near-no-op (dedupe skips); incremental sync runs on schedule inside the container; failures visible in `pmr sync status`.
 
@@ -88,6 +94,8 @@ Conventions used below:
 
 ---
 
+
+
 ## Phase 2 — Ingest raw activity into the append-only wallet_events ledger
 
 **Goal:** deterministic, idempotent parsing of Raw Store payloads into the immutable ledger.
@@ -95,6 +103,7 @@ Conventions used below:
 **Scope:** ingest pipeline raw_fetches → `wallet_events`; dedupe keys; event typing (TRADE, MERGE, SPLIT, REDEEM, REWARD, TRANSFER, unknown-preserving); signed delta conventions; re-parse capability. No projections yet.
 
 **Files/modules:**
+
 - `pmresearch/ledger/model.py` — event dataclass, event_type enum (open set: unknown types stored as-is with a warning, never dropped), signed `delta_shares`/`delta_usdc` conventions per type (documented in module docstring): TRADE BUY = +shares/−usdc; SELL = −shares/+usdc; REWARD = +usdc; MERGE = −shares both tokens/+usdc (as reported); REDEEM as reported (payout derivation deferred to Phase 8)
 - `pmresearch/ingest/activity.py` — parse one raw payload → normalized events; `dedupe_key = sha256(wallet|tx_hash|type|asset|side|size|price|timestamp)`; document the collision caveat (two byte-identical fills in one tx collapse — reconciliation in Phase 5 is the detector)
 - `pmresearch/ingest/runner.py` — iterate unprocessed raw_fetches (track `ingested_at` on raw_fetches), insert-or-ignore on dedupe_key, mark processed; `--reparse` mode: wipe ledger rows for a wallet and re-ingest from raw (allowed because source of truth is raw + API, and ledger rows carry provenance)
@@ -110,11 +119,26 @@ Conventions used below:
 
 **Acceptance criteria:** full RN1 raw history ingested; idempotency proven (second run inserts 0); every ledger row traces to a raw_ref; unknown event types preserved, logged, and counted, not dropped.
 
-**Common failure modes:** float precision drift making dedupe_keys unstable (normalize numbers to fixed-precision strings before hashing); window-overlap duplicates surviving because of field ordering differences (canonicalize field order in the key); silently dropping rows that fail validation (must go to a logged reject count with raw_ref).
+**Common failure modes:** float precision drift making dedupe_keys unstable (normalize numbers to fixed-precision strings before hashing); window-overlap duplicates surviving because of field ordering differences (canonicalize field order in the key); silently dropping rows that fail validation (must go to a logged reject count with raw_ref).  
+  
+Important note:   
+Important deduplication requirement: 
+
+Do not deduplicate only by transactionHash or transactionHash + asset.
+
+A single transaction can contain multiple legitimate fills.
+
+The ledger must preserve multiple real fills from the same transaction.
+
+Use a conservative composite dedupe key based on all available stable fields, and add tests with multiple fills in the same transaction.
+
+If uniqueness is ambiguous, preserve the events and let reconciliation catch issues rather than accidentally dropping valid fills.
 
 **Prompt:** `Implement Phase 2 of IMPLEMENTATION_PLAN.md exactly as scoped. Do not build projections. Pay special attention to dedupe-key stability and idempotency tests. Run tests, then do the manual verification against RN1's ingested ledger and show me ledger stats and three spot-checked events. Commit when acceptance criteria pass.`
 
 ---
+
+
 
 ## Phase 3 — Gamma metadata: markets, tokens, events, structure descriptors
 
@@ -140,6 +164,8 @@ Conventions used below:
 
 ---
 
+
+
 ## Phase 4 — Ledger replay: current token holdings
 
 **Goal:** first real projection — replay `wallet_events` into per-token holdings with WAC cost basis.
@@ -163,6 +189,8 @@ Conventions used below:
 **Prompt:** `Implement Phase 4 of IMPLEMENTATION_PLAN.md exactly as scoped. Use golden ledger fixtures with hand-computed expectations. Watch numeric precision (Decimal/micro-units). Run tests, replay RN1 holdings, and show me the nonzero holdings next to the same positions on the Polymarket UI. Commit when acceptance criteria pass.`
 
 ---
+
+
 
 ## Phase 5 — Reconciliation v1: holdings vs /positions.size
 
@@ -188,6 +216,8 @@ Conventions used below:
 
 ---
 
+
+
 ## Phase 6 — Episodes: flat-to-flat boundaries + WAC realized PnL
 
 **Goal:** the primary analytical unit (ADR 0003) computed as a projection.
@@ -211,6 +241,8 @@ Conventions used below:
 **Prompt:** `Implement Phase 6 of IMPLEMENTATION_PLAN.md exactly as scoped. Flat-to-flat, WAC, no debounce, per ADR 0003. Include the cross-projection consistency test against holdings. Note in output that resolution-closed episode PnL is understated until Phase 8. Show me episodes stats for RN1 and a hand-verified episode walkthrough. Commit when acceptance criteria pass.`
 
 ---
+
+
 
 ## Phase 7 — Reconciliation v2: avgPrice and realizedPnl vs oracle
 
@@ -236,6 +268,8 @@ Conventions used below:
 
 ---
 
+
+
 ## Phase 8 — Derived events: redemption proceeds; full MERGE/SPLIT/REDEEM/REWARD semantics; PnL decomposition
 
 **Goal:** complete, honest PnL — including the cash flows the API reports as zero.
@@ -259,6 +293,8 @@ Conventions used below:
 **Prompt:** `Implement Phase 8 of IMPLEMENTATION_PLAN.md exactly as scoped. Derived events are idempotent, marked is_derived, and only fill values the API reports as zero. The decomposition-sums-to-total invariant is a required test. Show me RN1's PnL decomposition by category and the Phase 7 reconciliation before/after. Commit when acceptance criteria pass.`
 
 ---
+
+
 
 ## Phase 9 — Mark service, price_points, daily equity, staleness, /value reconciliation
 
@@ -284,6 +320,8 @@ Conventions used below:
 
 ---
 
+
+
 ## Phase 10 — Exposure Engine: directional+bond, event-level exposure vectors
 
 **Goal:** the strategy-analysis read models (CONTEXT.md: Market-level Exposure, Event-level Exposure), data-driven by descriptors.
@@ -307,6 +345,8 @@ Conventions used below:
 **Prompt:** `Implement Phase 10 of IMPLEMENTATION_PLAN.md exactly as scoped. Dispatch strictly on structure descriptors; complementarity by token index only — no outcome-label string logic anywhere. Show me RN1's directional+bond for one market and the exposure vector for one negRisk event. Commit when acceptance criteria pass.`
 
 ---
+
+
 
 ## Phase 11 — Maker/taker enrichment: Goldsky subgraph + optional RPC recent-gap
 
@@ -332,6 +372,8 @@ Conventions used below:
 
 ---
 
+
+
 ## Phase 12 — Minimal REST book sampler with retention limits
 
 **Goal:** start accruing irreplaceable spread/depth context for the relevant slice (ADR 0005).
@@ -355,6 +397,8 @@ Conventions used below:
 **Prompt:** `Implement Phase 12 of IMPLEMENTATION_PLAN.md exactly as scoped. Relevant tokens only, retention and storage budget from day one, isolated from sync jobs. Show me books status after an hour of sampling and prove retention pruning works. Commit when acceptance criteria pass.`
 
 ---
+
+
 
 ## Phase 13 — Behavioral fingerprints
 
@@ -380,6 +424,8 @@ Conventions used below:
 
 ---
 
+
+
 ## Phase 14 — Strategy detectors: market_making, inventory_cycling, value_betting
 
 **Goal:** first scored hypotheses with evidence and blind spots (CONTEXT.md: Strategy Detector/Label — no booleans).
@@ -403,6 +449,8 @@ Conventions used below:
 **Prompt:** `Implement Phase 14 of IMPLEMENTATION_PLAN.md exactly as scoped. Detectors read fingerprints only, emit scores 0–1 with machine-readable evidence and explicit blind spots — no booleans anywhere. Show me detect explain output for all three watchlist wallets across all three detectors. Commit when acceptance criteria pass.`
 
 ---
+
+
 
 ## Phase 15 — Report generator: "Why is RN1 profitable?"
 
@@ -428,6 +476,8 @@ Conventions used below:
 
 ---
 
+
+
 ## Phase 16 — Streamlit research shell
 
 **Goal:** the disposable dashboard (ADR 0004), built only now that the core library already answers everything via CLI.
@@ -449,6 +499,8 @@ Conventions used below:
 **Prompt:** `Implement Phase 16 of IMPLEMENTATION_PLAN.md exactly as scoped. Dashboard calls only the pmresearch.api façade; include the automated import-boundary and deletion tests. Bring it up in Compose and walk me through every view for RN1. Commit when acceptance criteria pass.`
 
 ---
+
+
 
 ## Phase 17 — Hardening and MVP acceptance
 
@@ -473,6 +525,8 @@ Conventions used below:
 **Prompt:** `Implement Phase 17 of IMPLEMENTATION_PLAN.md exactly as scoped. Run the real restore drill and capture logs, wire staleness alerts, implement pmr acceptance, and start the 7-day soak. At the end of the soak, produce docs/MVP_ACCEPTANCE.md with evidence for all seven ADR 0006 points. Commit when acceptance criteria pass.`
 
 ---
+
+
 
 ## Phase ordering rationale
 
@@ -502,3 +556,4 @@ Then:
 3. Confirm the acceptance criteria checklist for Phase 0 one by one.
 4. Commit with a clear message and push.
 ```
+

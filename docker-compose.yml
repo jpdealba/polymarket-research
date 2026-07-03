@@ -1,0 +1,8 @@
+services:
+  collector:
+    build: .
+    volumes:
+      - ./data:/data
+    environment:
+      - PMR_DATA_DIR=/data
+    restart: unless-stopped
