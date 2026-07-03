@@ -16,7 +16,11 @@ from ..logging_setup import setup_logging
 from ..rawstore.store import RawStore
 from ..sources.dataapi import DataApiSource
 from ..sources.gamma import GammaSource
-from ..ingest.markets import ledger_condition_ids, upsert_market_payloads
+from ..ingest.markets import (
+    MarketSyncStats,
+    ledger_condition_ids,
+    upsert_market_payloads,
+)
 from . import manager
 from . import sync as sync_runner
 
@@ -24,6 +28,75 @@ logger = logging.getLogger(__name__)
 
 INCREMENTAL_INTERVAL_MINUTES = 5
 MARKETS_REFRESH_INTERVAL_MINUTES = 60
+
+
+def _fetch_and_upsert_markets(
+    session, source: GammaSource, raw_store: RawStore, condition_ids: list[str]
+) -> MarketSyncStats:
+    requested = sorted(
+        {condition_id.lower() for condition_id in condition_ids if condition_id}
+    )
+    markets_upserted = 0
+    tokens_upserted = 0
+    events_upserted = 0
+    missing: list[str] = []
+
+    for open_batch in source.fetch_market_batches_by_condition_ids(
+        raw_store, requested, closed=False
+    ):
+        open_stats = upsert_market_payloads(
+            session, (open_batch.payload,), list(open_batch.requested_ids)
+        )
+        markets_upserted += open_stats.markets_upserted
+        tokens_upserted += open_stats.tokens_upserted
+        events_upserted += open_stats.events_upserted
+
+        if not open_batch.missing_ids:
+            continue
+
+        for closed_batch in source.fetch_market_batches_by_condition_ids(
+            raw_store, list(open_batch.missing_ids), closed=True
+        ):
+            closed_stats = upsert_market_payloads(
+                session, (closed_batch.payload,), list(closed_batch.requested_ids)
+            )
+            markets_upserted += closed_stats.markets_upserted
+            tokens_upserted += closed_stats.tokens_upserted
+            events_upserted += closed_stats.events_upserted
+            missing.extend(closed_batch.missing_ids)
+
+    return MarketSyncStats(
+        requested_conditions=len(requested),
+        markets_upserted=markets_upserted,
+        tokens_upserted=tokens_upserted,
+        events_upserted=events_upserted,
+        missing_conditions=len(set(missing)),
+    )
+
+
+def _fetch_and_upsert_closed_markets(
+    session, source: GammaSource, raw_store: RawStore, condition_ids: list[str]
+) -> MarketSyncStats:
+    requested = sorted(
+        {condition_id.lower() for condition_id in condition_ids if condition_id}
+    )
+    stats = MarketSyncStats.empty()
+    missing: list[str] = []
+    for batch in source.fetch_market_batches_by_condition_ids(
+        raw_store, requested, closed=True
+    ):
+        batch_stats = upsert_market_payloads(
+            session, (batch.payload,), list(batch.requested_ids)
+        )
+        stats = stats.merge(batch_stats)
+        missing.extend(batch.missing_ids)
+    return MarketSyncStats(
+        requested_conditions=len(requested),
+        markets_upserted=stats.markets_upserted,
+        tokens_upserted=stats.tokens_upserted,
+        events_upserted=stats.events_upserted,
+        missing_conditions=len(set(missing)),
+    )
 
 
 def run_incremental_cycle(settings: Settings) -> None:
@@ -56,8 +129,7 @@ def run_markets_refresh_cycle(settings: Settings, *, missing_only: bool = False)
         condition_ids = ledger_condition_ids(session, missing_only=missing_only)
         if not condition_ids:
             return
-        result = source.fetch_markets_by_condition_ids(raw_store, condition_ids)
-        stats = upsert_market_payloads(session, result.payloads, condition_ids)
+        stats = _fetch_and_upsert_markets(session, source, raw_store, condition_ids)
         logger.info(
             "Markets refresh: requested=%d markets=%d tokens=%d events=%d missing=%d",
             stats.requested_conditions,
@@ -96,8 +168,7 @@ def run_resolution_sweep_cycle(settings: Settings) -> None:
     source = GammaSource()
     raw_store = RawStore(settings, session)
     try:
-        result = source.fetch_markets_by_condition_ids(raw_store, condition_ids)
-        stats = upsert_market_payloads(session, result.payloads, condition_ids)
+        stats = _fetch_and_upsert_closed_markets(session, source, raw_store, condition_ids)
         logger.info(
             "Resolution sweep: requested=%d markets=%d missing=%d",
             stats.requested_conditions,

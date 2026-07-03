@@ -7,10 +7,80 @@ from sqlalchemy import text
 
 from ..config import ensure_data_dirs, get_settings
 from ..db.engine import get_session_factory
-from ..ingest.markets import ledger_condition_ids, missing_market_count, upsert_market_payloads
+from ..ingest.markets import (
+    MarketSyncStats,
+    ledger_condition_ids,
+    missing_market_count,
+    upsert_market_payloads,
+)
 from ..logging_setup import setup_logging
 from ..rawstore.store import RawStore
 from ..sources.gamma import GammaSource
+
+
+def _sync_condition_ids(
+    session, source: GammaSource, raw_store: RawStore, condition_ids: list[str]
+) -> MarketSyncStats:
+    requested = sorted(
+        {condition_id.lower() for condition_id in condition_ids if condition_id}
+    )
+    markets_upserted = 0
+    tokens_upserted = 0
+    events_upserted = 0
+    missing: list[str] = []
+    batches = 0
+
+    for open_batch in source.fetch_market_batches_by_condition_ids(
+        raw_store, requested, closed=False
+    ):
+        batches += 1
+        open_stats = upsert_market_payloads(
+            session, (open_batch.payload,), list(open_batch.requested_ids)
+        )
+        markets_upserted += open_stats.markets_upserted
+        tokens_upserted += open_stats.tokens_upserted
+        events_upserted += open_stats.events_upserted
+        if open_batch.payload or batches == 1 or batches % 50 == 0:
+            click.echo(
+                f"Batch {batches} closed=false: "
+                f"requested +{open_stats.requested_conditions}, "
+                f"Gamma rows {len(open_batch.payload)}, "
+                f"upserted +{open_stats.markets_upserted}; "
+                f"totals requested {len(requested)}, "
+                f"markets {markets_upserted}."
+            )
+
+        if not open_batch.missing_ids:
+            continue
+
+        for closed_batch in source.fetch_market_batches_by_condition_ids(
+            raw_store, list(open_batch.missing_ids), closed=True
+        ):
+            batches += 1
+            closed_stats = upsert_market_payloads(
+                session, (closed_batch.payload,), list(closed_batch.requested_ids)
+            )
+            markets_upserted += closed_stats.markets_upserted
+            tokens_upserted += closed_stats.tokens_upserted
+            events_upserted += closed_stats.events_upserted
+            missing.extend(closed_batch.missing_ids)
+            if closed_batch.payload or batches % 50 == 0:
+                click.echo(
+                    f"Batch {batches} closed=true: "
+                    f"requested +{closed_stats.requested_conditions}, "
+                    f"Gamma rows {len(closed_batch.payload)}, "
+                    f"upserted +{closed_stats.markets_upserted}; "
+                    f"totals requested {len(requested)}, "
+                    f"markets {markets_upserted}, missing {len(missing)}."
+                )
+
+    return MarketSyncStats(
+        requested_conditions=len(requested),
+        markets_upserted=markets_upserted,
+        tokens_upserted=tokens_upserted,
+        events_upserted=events_upserted,
+        missing_conditions=len(set(missing)),
+    )
 
 
 @click.group("markets")
@@ -37,8 +107,7 @@ def markets_sync(sync_all: bool, conditions: tuple[str, ...]) -> None:
             if not condition_ids and not sync_all:
                 condition_ids = ledger_condition_ids(session, missing_only=False)
         raw_store = RawStore(settings, session)
-        fetch_result = source.fetch_markets_by_condition_ids(raw_store, condition_ids)
-        stats = upsert_market_payloads(session, fetch_result.payloads, condition_ids)
+        stats = _sync_condition_ids(session, source, raw_store, condition_ids)
     finally:
         source.close()
         session.close()
@@ -75,4 +144,3 @@ def markets_stats() -> None:
     click.echo(f"resolved={resolved}")
     click.echo(f"unclassified_descriptors={unclassified}")
     click.echo(f"ledger_conditions_missing_market={missing}")
-

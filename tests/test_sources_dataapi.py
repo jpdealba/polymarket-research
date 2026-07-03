@@ -154,3 +154,22 @@ def test_backoff_gives_up_after_max_retries():
         assert False, "expected HTTPStatusError"
     except httpx.HTTPStatusError as exc:
         assert exc.response.status_code == 503
+
+
+def test_non_json_http_error_body_returns_response_for_caller_to_raise():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(414, text="URI Too Long")
+
+    transport = httpx.MockTransport(handler)
+    client = httpx.Client(base_url="https://fake", transport=transport)
+    adapter = SourceAdapter("https://fake", client=client, sleep_fn=lambda s: None)
+
+    response, payload = adapter.get_json("/markets", {"condition_ids": ["0xabc"]})
+
+    assert response.status_code == 414
+    assert payload is None
+    try:
+        response.raise_for_status()
+        assert False, "expected HTTPStatusError"
+    except httpx.HTTPStatusError as exc:
+        assert exc.response.status_code == 414

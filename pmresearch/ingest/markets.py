@@ -21,6 +21,19 @@ class MarketSyncStats:
     events_upserted: int
     missing_conditions: int
 
+    @staticmethod
+    def empty() -> "MarketSyncStats":
+        return MarketSyncStats(0, 0, 0, 0, 0)
+
+    def merge(self, other: "MarketSyncStats") -> "MarketSyncStats":
+        return MarketSyncStats(
+            requested_conditions=self.requested_conditions + other.requested_conditions,
+            markets_upserted=self.markets_upserted + other.markets_upserted,
+            tokens_upserted=self.tokens_upserted + other.tokens_upserted,
+            events_upserted=self.events_upserted + other.events_upserted,
+            missing_conditions=self.missing_conditions + other.missing_conditions,
+        )
+
 
 def parse_jsonish_list(value: object) -> list:
     if value is None or value == "":
@@ -247,4 +260,3 @@ def upsert_market_payloads(
         events_upserted=events_upserted,
         missing_conditions=len(requested - seen_conditions),
     )
-

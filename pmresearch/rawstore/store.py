@@ -51,7 +51,7 @@ class RawStore:
         source: str,
         endpoint: str,
         wallet: str,
-        params: dict,
+        params: object,
         payload: object,
         http_status: int,
         fetched_at: datetime | None = None,

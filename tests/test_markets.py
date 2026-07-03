@@ -4,8 +4,14 @@ import httpx
 from sqlalchemy import text
 
 from pmresearch.exposure.descriptors import derive_structure_type
-from pmresearch.ingest.markets import ledger_condition_ids, missing_market_count, upsert_market_payloads
+from pmresearch.ingest.markets import (
+    MarketSyncStats,
+    ledger_condition_ids,
+    missing_market_count,
+    upsert_market_payloads,
+)
 from pmresearch.rawstore.store import RawStore
+from pmresearch.cli.markets import _sync_condition_ids
 from pmresearch.sources.gamma import GammaSource
 
 
@@ -161,9 +167,237 @@ def test_gamma_source_batches_and_raw_stores(settings, session):
     assert result.requests_made == 1
     assert result.rows_fetched == 1
     assert seen_params[0]["condition_ids"] == COND_BINARY
+    assert seen_params[0]["closed"] == "false"
     raw = session.execute(
         text("SELECT source, endpoint, row_count FROM raw_fetches WHERE source = 'gamma'")
     ).fetchone()
     assert raw.source == "gamma"
     assert raw.endpoint == "markets"
     assert raw.row_count == 1
+
+
+def test_gamma_closed_false_returns_no_historical_markets_but_closed_true_does(
+    settings, session
+):
+    seen_closed = []
+
+    def handler(request):
+        closed = request.url.params["closed"]
+        seen_closed.append(closed)
+        ids = request.url.params.get_list("condition_ids")
+        rows = (
+            [
+                _market(
+                    condition_id,
+                    outcomes=("Yes", "No"),
+                    token_ids=(f"{condition_id[-4:]}01", f"{condition_id[-4:]}02"),
+                    closed=True,
+                )
+                for condition_id in ids
+            ]
+            if closed == "true"
+            else []
+        )
+        return httpx.Response(200, json=rows)
+
+    client = httpx.Client(
+        base_url="https://gamma-api.polymarket.test",
+        transport=httpx.MockTransport(handler),
+    )
+    source = GammaSource(client=client, batch_size=10)
+    raw_store = RawStore(settings, session)
+
+    open_result = source.fetch_markets_by_condition_ids(
+        raw_store, [COND_BINARY], closed=False
+    )
+    closed_result = source.fetch_markets_by_condition_ids(
+        raw_store, [COND_BINARY], closed=True
+    )
+
+    assert open_result.rows_fetched == 0
+    assert closed_result.rows_fetched == 1
+    assert seen_closed == ["false", "true"]
+
+
+def test_markets_sync_falls_back_to_closed_true_per_batch(settings, session):
+    seen_closed = []
+
+    def handler(request):
+        closed = request.url.params["closed"]
+        seen_closed.append(closed)
+        ids = request.url.params.get_list("condition_ids")
+        rows = (
+            [
+                _market(
+                    condition_id,
+                    outcomes=("Yes", "No"),
+                    token_ids=(f"{condition_id[-4:]}01", f"{condition_id[-4:]}02"),
+                    closed=True,
+                )
+                for condition_id in ids
+            ]
+            if closed == "true"
+            else []
+        )
+        return httpx.Response(200, json=rows)
+
+    client = httpx.Client(
+        base_url="https://gamma-api.polymarket.test",
+        transport=httpx.MockTransport(handler),
+    )
+    source = GammaSource(client=client, batch_size=1)
+    raw_store = RawStore(settings, session)
+
+    stats = _sync_condition_ids(session, source, raw_store, [COND_BINARY, COND_NEGRISK])
+
+    assert seen_closed == ["false", "true", "false", "true"]
+    assert stats.requested_conditions == 2
+    assert stats.markets_upserted == 2
+    assert stats.missing_conditions == 0
+    assert session.execute(text("SELECT COUNT(*) FROM markets")).scalar() == 2
+
+
+def test_gamma_uses_repeated_plain_condition_ids(settings, session):
+    condition_ids = [COND_BINARY, COND_NEGRISK]
+    seen_query = []
+    seen_ids = []
+
+    def handler(request):
+        query = request.url.query
+        if isinstance(query, bytes):
+            query = query.decode("ascii")
+        seen_query.append(query)
+        ids = request.url.params.get_list("condition_ids")
+        seen_ids.append(ids)
+        return httpx.Response(
+            200,
+            json=[
+                _market(condition_id, outcomes=("Yes", "No"), token_ids=("101", "102"))
+                for condition_id in ids
+            ],
+        )
+
+    client = httpx.Client(
+        base_url="https://gamma-api.polymarket.test",
+        transport=httpx.MockTransport(handler),
+    )
+    source = GammaSource(client=client, batch_size=10)
+    raw_store = RawStore(settings, session)
+
+    result = source.fetch_markets_by_condition_ids(raw_store, condition_ids)
+
+    assert result.rows_fetched == 2
+    assert seen_ids == [sorted(condition_id.lower() for condition_id in condition_ids)]
+    assert "condition_ids%5B%5D" not in seen_query[0]
+    assert "condition_ids[]=" not in seen_query[0]
+    assert seen_query[0].count("condition_ids=") == 2
+    assert "closed=false" in seen_query[0]
+
+
+def test_gamma_source_splits_long_condition_queries(settings, session):
+    max_query_chars = 360
+    seen_query_lengths = []
+
+    condition_ids = [f"0x{i:064x}" for i in range(10)]
+
+    def handler(request):
+        query = request.url.query
+        if isinstance(query, bytes):
+            query = query.decode("ascii")
+        seen_query_lengths.append(len(query))
+        ids = request.url.params.get_list("condition_ids")
+        return httpx.Response(
+            200,
+            json=[
+                _market(condition_id, outcomes=("Yes", "No"), token_ids=("101", "102"))
+                for condition_id in ids
+            ],
+        )
+
+    client = httpx.Client(
+        base_url="https://gamma-api.polymarket.test",
+        transport=httpx.MockTransport(handler),
+    )
+    source = GammaSource(client=client, batch_size=100, max_query_chars=max_query_chars)
+    raw_store = RawStore(settings, session)
+
+    result = source.fetch_markets_by_condition_ids(raw_store, condition_ids)
+
+    assert result.requests_made > 1
+    assert result.rows_fetched == len(condition_ids)
+    assert max(seen_query_lengths) <= max_query_chars
+
+
+def test_gamma_rejects_unrelated_condition_ids(settings, session, caplog):
+    def handler(request):
+        return httpx.Response(
+            200,
+            json=[_market(COND_TEAM, outcomes=("Yes", "No"), token_ids=("101", "102"))],
+        )
+
+    client = httpx.Client(
+        base_url="https://gamma-api.polymarket.test",
+        transport=httpx.MockTransport(handler),
+    )
+    source = GammaSource(client=client, batch_size=10)
+    raw_store = RawStore(settings, session)
+
+    with caplog.at_level("WARNING", logger="pmresearch.sources.gamma"):
+        result = source.fetch_markets_by_condition_ids(raw_store, [COND_BINARY])
+
+    assert result.rows_fetched == 0
+    assert "Ignoring Gamma market" in caplog.text
+    stats = upsert_market_payloads(session, result.payloads, [COND_BINARY])
+    assert stats.markets_upserted == 0
+    assert stats.missing_conditions == 1
+    assert session.execute(text("SELECT COUNT(*) FROM markets")).scalar() == 0
+
+
+def test_gamma_batches_can_be_upserted_incrementally_and_idempotently(settings, session):
+    condition_ids = [COND_BINARY, COND_NEGRISK]
+
+    def handler(request):
+        ids = request.url.params.get_list("condition_ids")
+        return httpx.Response(
+            200,
+            json=[
+                _market(
+                    condition_id,
+                    outcomes=("Yes", "No"),
+                    token_ids=(f"{condition_id[-4:]}01", f"{condition_id[-4:]}02"),
+                )
+                for condition_id in ids
+            ],
+        )
+
+    client = httpx.Client(
+        base_url="https://gamma-api.polymarket.test",
+        transport=httpx.MockTransport(handler),
+    )
+    source = GammaSource(client=client, batch_size=1)
+    raw_store = RawStore(settings, session)
+
+    def run_once():
+        stats = MarketSyncStats.empty()
+        for batch in source.fetch_market_batches_by_condition_ids(raw_store, condition_ids):
+            batch_stats = upsert_market_payloads(
+                session, (batch.payload,), list(batch.requested_ids)
+            )
+            stats = stats.merge(batch_stats)
+        return stats
+
+    stats = run_once()
+    second = run_once()
+    assert stats.requested_conditions == 2
+    assert stats.markets_upserted == 2
+    assert stats.tokens_upserted == 4
+    assert stats.missing_conditions == 0
+    assert second.requested_conditions == 2
+    assert second.markets_upserted == 2
+    assert second.tokens_upserted == 4
+    assert second.missing_conditions == 0
+    assert session.execute(text("SELECT COUNT(*) FROM markets")).scalar() == 2
+    raw_count = session.execute(
+        text("SELECT COUNT(*) FROM raw_fetches WHERE source = 'gamma'")
+    ).scalar()
+    assert raw_count == 2

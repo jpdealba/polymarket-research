@@ -8,6 +8,7 @@ import logging
 import random
 import time
 from dataclasses import dataclass
+from json import JSONDecodeError
 from typing import Callable
 
 import httpx
@@ -50,7 +51,9 @@ class SourceAdapter:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    def get_json(self, path: str, params: dict) -> tuple[httpx.Response, object]:
+    def get_json(
+        self, path: str, params: httpx.QueryParamTypes
+    ) -> tuple[httpx.Response, object]:
         attempt = 0
         while True:
             response = self._client.get(path, params=params)
@@ -72,5 +75,12 @@ class SourceAdapter:
                 )
                 self._sleep(sleep_s)
                 continue
-            payload = response.json() if response.content else None
+            if not response.content:
+                return response, None
+            try:
+                payload = response.json()
+            except JSONDecodeError:
+                if response.is_error:
+                    return response, None
+                raise
             return response, payload
