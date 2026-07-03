@@ -11,11 +11,25 @@ from ..backup import create_backup, restore_backup
 from ..config import ensure_data_dirs, get_settings
 from ..db.migrations import current_revision, upgrade_to_head
 from ..logging_setup import setup_logging
+from .sync import sync_group
+from .wallets import wallet_group
 
 
 @click.group()
 def main() -> None:
     """pmr — Polymarket Wallet Research Platform CLI."""
+
+
+main.add_command(wallet_group)
+main.add_command(sync_group)
+
+
+@main.command()
+def run() -> None:
+    """Run the collector scheduler in the foreground (what the container runs)."""
+    from ..walletmanager.scheduler import run_forever
+
+    run_forever()
 
 
 @main.command()
