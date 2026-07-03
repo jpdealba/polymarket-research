@@ -68,7 +68,7 @@ Orchestration: `pmresearch/walletmanager/` (`manager.py`, `scheduler.py`, `sync.
 
 CLI commands (`pmresearch/cli/*.py`) are thin — one file per command group (`wallets.py`, `sync.py`, `ingest.py`, `markets.py`, `fees.py`), each wired into `pmresearch/cli/__init__.py`. Business logic belongs in the module it's exposing, not in the CLI layer.
 
-`DESIGN.md`'s target architecture also specifies `marks/`, `detectors/`, `reconcile/`, and `apps/dashboard/` — these are planned but not yet implemented. Only `sources`, `rawstore`, `ingest`, `ledger`, `exposure`, `fees`, `reports`, `projections` (holdings only so far; `ledger/replay.py` provides the ordered event stream), `walletmanager`, `db`, `cli` exist today.
+`DESIGN.md`'s target architecture also specifies `marks/`, `detectors/`, `reconcile/`, and `apps/dashboard/` — these are planned but not yet implemented. Only `sources`, `rawstore`, `ingest`, `ledger`, `exposure` (structure descriptors plus the Phase 10 exposure engine: directional+bond, event-level negRisk vectors), `fees`, `reports`, `projections` (holdings, daily_equity, and exposures so far; `ledger/replay.py` provides the ordered event stream), `walletmanager`, `db`, `cli` exist today.
 
 ## Database
 

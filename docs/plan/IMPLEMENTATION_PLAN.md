@@ -454,6 +454,18 @@ Calcular estimated_fee como dato explicativo.
 
 **Prompt:** `Implement Phase 10 of IMPLEMENTATION_PLAN.md exactly as scoped. Dispatch strictly on structure descriptors; complementarity by token index only — no outcome-label string logic anywhere. Show me RN1's directional+bond for one market and the exposure vector for one negRisk event. Commit when acceptance criteria pass.`
 
+**Implementation checklist:**
+
+- [x] `m0011` migration for `exposures_daily` and `event_exposures_daily` (numeric fields as TEXT decimal strings, `(wallet,date)` indexes).
+- [x] `pmresearch/exposure/binary.py` — directional (`qty0 − qty1`) + bond (`min`) by token index.
+- [x] `pmresearch/exposure/negrisk.py` — per-condition directional vector + `net_after_exclusivity` netting rule (Σ per-sibling directional across mutually-exclusive outcomes).
+- [x] `pmresearch/exposure/unclassified.py` — raw per-token qty vector, no decomposition.
+- [x] `pmresearch/exposure/engine.py` — dispatch on `structure_type`; unknown/missing → unclassified path with counted warning (never guesses).
+- [x] `pmresearch/projections/exposures.py` — day-by-day UTC replay (qty-only), `ExposuresProjection`, `rebuild_exposures`, `fetch_exposures`, `fetch_event_exposures`; drop-and-rebuild, deterministic, batched commits.
+- [x] `pmr exposure build [--wallet]` / `pmr exposure show --wallet <addr> [--market|--event]`, wired into the CLI.
+- [x] Tests: binary golden, team-name labels, negRisk 3-sibling netting, unclassified fallback, bond+MERGE interaction, unknown-structure dispatch, determinism, and grep guard for zero hardcoded outcome-label logic.
+- [ ] Manual RN1 `pmr exposure show` walkthrough — deferred (no live RN1 data loaded locally).
+
 ---
 
 

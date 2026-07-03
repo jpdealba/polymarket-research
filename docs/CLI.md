@@ -52,6 +52,8 @@ Todos los comandos aceptan `--help` para ver la ayuda integrada.
 | `pmr pnl show` | `--wallet TEXT`: requerido; `--by-category`: muestra scopes por categoria | Muestra PnL descompuesto en directional, bond/merge, rewards, redemption, fees y total. |
 | `pmr equity build` | `--wallet TEXT`: limita a una wallet; sin flag usa wallets activas de watchlist o, si no hay, todas las del ledger | Construye `daily_equity` por dia UTC: portfolio value, PnL realizado acumulado, unrealized PnL, rewards acumulados, drawdown diario aproximado y `stale_equity_share`. Imprime progreso durante el replay y hace flush/commit por batches de `price_points` y `daily_equity`; tambien persiste marks con source, age y stale flag. |
 | `pmr equity show` | `--wallet TEXT`: requerido; `--limit INT`: filas finales a mostrar, default `10` | Muestra resumen y ultimas filas de la curva diaria de equity. Incluye la caveat de que el drawdown es daily-close based e intradia aproximado. |
+| `pmr exposure build` | `--wallet TEXT`: limita a una wallet; sin flag usa wallets activas de watchlist o, si no hay, todas las del ledger | Construye las proyecciones `exposures_daily` (exposicion market-level directional+bond o vector unclassified por wallet x condition x dia UTC) y `event_exposures_daily` (vector de exposicion por condition + neteo `net_after_exclusivity` para eventos negRisk). Despacha solo por `structure_type`; estructuras desconocidas van al camino unclassified con warning contado. Imprime progreso durante el replay y hace flush/commit por batches. |
+| `pmr exposure show` | `--wallet TEXT`: requerido; `--market TEXT`: filtra por `condition_id`; `--event TEXT`: filtra por `event_id`; `--limit INT`: filas finales a mostrar, default `10` | Muestra filas de exposicion. Sin `--event` muestra market-level (structure_type, directional, bond, event_id); con `--event` muestra el vector de exposicion del evento y su neteo. `--market` y `--event` no se pueden combinar. |
 | `pmr reconcile run` | `--wallet TEXT`: requerido; `--json`: salida JSON estable | Ejecuta reconciliacion contra Data API: raw-storea `/positions`, compara `positions.size` contra `holdings.qty`, revisa WAC/realizedPnl cuando el oracle trae esos campos, agrega chequeo de portfolio value contra `/value` usando la ultima fila de `daily_equity`, persiste facts por batches y actualiza `wallet_trust`. En salida humana imprime progreso; con `--json` no imprime progreso para mantener JSON estable. |
 | `pmr reconcile status` | `--wallet TEXT`: opcional | Muestra la ultima reconciliacion por wallet: conteos, trust, excepciones conocidas, top discrepancias por cantidad/notional, negativos, holdings sin metadata presentes en `/positions`, discrepancias WAC/realizedPnl y resultado de `/value`. |
 | `pmr trust status` | `--wallet TEXT`: opcional | Muestra el estado derivado de confianza de cada wallet (`trusted`, `warn`, `untrusted`) y la razon de la ultima reconciliacion. |
@@ -74,6 +76,8 @@ pmr derive run --wallet 0x...
 pmr pnl show --wallet 0x... --by-category
 pmr equity build --wallet 0x...
 pmr equity show --wallet 0x...
+pmr exposure build --wallet 0x...
+pmr exposure show --wallet 0x... --event <event_id>
 pmr reconcile run --wallet 0x...
 pmr reconcile status
 pmr trust status
