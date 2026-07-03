@@ -90,6 +90,14 @@ class PositionsFetchIncomplete(RuntimeError):
     """Raised when `/positions` pagination reaches the documented offset cap."""
 
 
+@dataclass(frozen=True)
+class ValueFetchOutcome:
+    raw_fetch_ids: tuple[int, ...]
+    value: Decimal
+    requests_made: int
+    raw: object
+
+
 def _decimal(value: object) -> Decimal:
     try:
         return Decimal(str(value or 0))
@@ -116,6 +124,16 @@ def _parse_position(row: object) -> PositionRow:
         raw=row,
         realized_pnl=_decimal(row.get("realizedPnl")),
     )
+
+
+def _parse_value(payload: object) -> Decimal:
+    if isinstance(payload, dict):
+        for key in ("value", "totalValue", "portfolioValue", "currentValue"):
+            if key in payload:
+                return _decimal(payload.get(key))
+    if isinstance(payload, list) and payload:
+        return sum((_parse_value(item) for item in payload), Decimal(0))
+    return _decimal(payload)
 
 
 def _is_offset_cap_error(response: httpx.Response, payload: object) -> bool:
@@ -329,3 +347,24 @@ class DataApiSource:
                     "Data API /positions reached offset cap with a full page; "
                     "refusing to reconcile partial oracle data."
                 )
+
+    def fetch_value(self, raw_store: RawStore, wallet: str) -> ValueFetchOutcome:
+        """Fetch the live Data API `/value` portfolio value for `wallet`."""
+        wallet = wallet.lower()
+        params = {"user": wallet}
+        response, payload = self._adapter.get_json("/value", params)
+        response.raise_for_status()
+        raw_result = raw_store.persist(
+            source="dataapi",
+            endpoint="value",
+            wallet=wallet,
+            params=params,
+            payload=payload or {},
+            http_status=response.status_code,
+        )
+        return ValueFetchOutcome(
+            raw_fetch_ids=() if raw_result.deduped else (raw_result.raw_fetch_id,),
+            value=_parse_value(payload),
+            requests_made=1,
+            raw=payload,
+        )

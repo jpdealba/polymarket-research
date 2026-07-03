@@ -11,15 +11,19 @@ from sqlalchemy.orm import Session
 
 from ..config import Settings
 from ..rawstore.store import RawStore
+from ..projections.daily_equity import latest_daily_equity
 from ..sources.dataapi import DataApiSource, PositionsFetchIncomplete
 from .checks import (
     RECONCILE_TOLERANCE,
+    VALUE_TOLERANCE,
     PresenceProbe,
     ReconciliationFact,
     ReconciliationResult,
     build_reconciliation_result,
     decimal_string,
     decimal_value,
+    value_check_fact,
+    value_fetch_error_fact,
 )
 from .trust import WalletTrust, derive_trust, fetch_wallet_trust, upsert_wallet_trust
 
@@ -57,6 +61,9 @@ def run_reconciliation(
                 tolerance=tolerance,
                 dust_epsilon=settings.dust_epsilon,
             )
+            result = _with_value_check(
+                session, source, raw_store, result, tolerance=VALUE_TOLERANCE
+            )
         except PositionsFetchIncomplete as exc:
             result = _incomplete_fetch_result(wallet, run_ts, tolerance, str(exc))
 
@@ -71,6 +78,45 @@ def run_reconciliation(
     finally:
         if owns_source:
             source.close()
+
+
+def _with_value_check(
+    session: Session,
+    source: DataApiSource,
+    raw_store: RawStore,
+    result: ReconciliationResult,
+    *,
+    tolerance: Decimal,
+) -> ReconciliationResult:
+    try:
+        fetched = source.fetch_value(raw_store, result.wallet)
+        latest = latest_daily_equity(session, result.wallet)
+        value_fact = value_check_fact(
+            wallet=result.wallet,
+            run_ts=result.run_ts,
+            oracle_value=fetched.value,
+            local_value=latest.portfolio_value if latest else None,
+            stale_equity_share=latest.stale_equity_share if latest else None,
+            equity_date=latest.date if latest else None,
+            tolerance=tolerance,
+        )
+    except Exception as exc:
+        value_fact = value_fetch_error_fact(
+            wallet=result.wallet,
+            run_ts=result.run_ts,
+            message=str(exc),
+            tolerance=tolerance,
+        )
+    return ReconciliationResult(
+        wallet=result.wallet,
+        run_ts=result.run_ts,
+        tolerance=result.tolerance,
+        facts=result.facts + (value_fact,),
+        remote_positions_total=result.remote_positions_total,
+        local_nonzero_holdings_total=result.local_nonzero_holdings_total,
+        negative_holdings_presence=result.negative_holdings_presence,
+        missing_token_metadata_presence=result.missing_token_metadata_presence,
+    )
 
 
 def _incomplete_fetch_result(

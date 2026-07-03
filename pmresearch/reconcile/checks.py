@@ -22,6 +22,7 @@ from ..sources.dataapi import PositionRow
 RECONCILE_TOLERANCE = Decimal("0.0001")
 WAC_TOLERANCE = Decimal("0.001")
 REALIZED_PNL_TOLERANCE = Decimal("0.01")
+VALUE_TOLERANCE = Decimal("0.02")
 _ZERO = Decimal("0")
 
 PASS_REASONS = {"exact_match", "dust_only", "within_realized_pnl_band"}
@@ -608,6 +609,88 @@ def realized_vs_oracle_fact(
         source="dataapi/positions",
         reason_code=reason,
         notes=notes,
+    )
+
+
+def value_check_fact(
+    *,
+    wallet: str,
+    run_ts: int,
+    oracle_value: Decimal,
+    local_value: Decimal | None,
+    stale_equity_share: Decimal | None,
+    equity_date: str | None,
+    tolerance: Decimal = VALUE_TOLERANCE,
+) -> ReconciliationFact:
+    notes = {
+        "equity_date": equity_date,
+        "stale_equity_share": decimal_string(stale_equity_share or _ZERO),
+        "comparison_scope": "portfolio_value",
+        "note": "Data API /value compared with latest daily_equity portfolio_value",
+    }
+    if local_value is None:
+        return ReconciliationFact(
+            wallet=wallet.lower(),
+            ts=run_ts,
+            check_type="portfolio_value",
+            subject="__portfolio__",
+            expected=oracle_value,
+            computed=_ZERO,
+            abs_diff=_ZERO,
+            pct_diff=_ZERO,
+            tolerance=tolerance,
+            status="skip",
+            source="dataapi/value+daily_equity",
+            reason_code="local_equity_missing",
+            notes=notes,
+        )
+    abs_diff = abs(oracle_value - local_value)
+    pct_diff = _pct_diff(abs_diff, oracle_value)
+    if pct_diff <= tolerance:
+        status = "pass"
+        reason = "within_value_band"
+    else:
+        status = "warn"
+        reason = "value_drift_categorized"
+        notes["classification"] = "outside_value_band"
+    return ReconciliationFact(
+        wallet=wallet.lower(),
+        ts=run_ts,
+        check_type="portfolio_value",
+        subject="__portfolio__",
+        expected=oracle_value,
+        computed=local_value,
+        abs_diff=abs_diff,
+        pct_diff=pct_diff,
+        tolerance=tolerance,
+        status=status,
+        source="dataapi/value+daily_equity",
+        reason_code=reason,
+        notes=notes,
+    )
+
+
+def value_fetch_error_fact(
+    *,
+    wallet: str,
+    run_ts: int,
+    message: str,
+    tolerance: Decimal = VALUE_TOLERANCE,
+) -> ReconciliationFact:
+    return ReconciliationFact(
+        wallet=wallet.lower(),
+        ts=run_ts,
+        check_type="portfolio_value",
+        subject="__portfolio__",
+        expected=_ZERO,
+        computed=_ZERO,
+        abs_diff=_ZERO,
+        pct_diff=_ZERO,
+        tolerance=tolerance,
+        status="skip",
+        source="dataapi/value",
+        reason_code="oracle_unavailable",
+        notes={"note": message},
     )
 
 

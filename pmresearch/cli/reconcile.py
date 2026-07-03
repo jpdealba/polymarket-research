@@ -136,6 +136,9 @@ def _emit_result(result, trust: dict | None) -> None:
     click.echo("\n== realizedPnl discrepancies ==")
     _emit_oracle_discrepancies(result, "positions_realized_pnl")
 
+    click.echo("\n== /value reconciliation ==")
+    _emit_value_check(result)
+
 
 def _display_check_type(check_type: str) -> str:
     if check_type == "positions_avg_price_info":
@@ -210,3 +213,19 @@ def _emit_oracle_discrepancies(result, check_type: str) -> None:
             f"scope={notes.get('comparison_scope')} title={notes.get('remote_title')!r} "
             f"outcome={notes.get('remote_outcome')!r}"
         )
+
+
+def _emit_value_check(result) -> None:
+    facts = [fact for fact in result.facts if fact.check_type == "portfolio_value"]
+    if not facts:
+        click.echo("(none)")
+        return
+    fact = facts[-1]
+    notes = fact.notes
+    click.echo(
+        f"oracle={decimal_string(fact.expected)} local={decimal_string(fact.computed)} "
+        f"diff={decimal_string(fact.abs_diff)} pct_diff={decimal_string(fact.pct_diff)} "
+        f"tolerance={decimal_string(fact.tolerance)} status={fact.status} "
+        f"reason={fact.reason_code} equity_date={notes.get('equity_date')} "
+        f"stale_equity_share={notes.get('stale_equity_share')}"
+    )
