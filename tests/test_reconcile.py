@@ -621,6 +621,59 @@ def test_json_output_schema_stable(settings, session, monkeypatch):
     }
 
 
+def test_status_labels_deprecated_avg_price_info(settings, session, monkeypatch):
+    monkeypatch.setenv("PMR_DATA_DIR", str(settings.data_dir))
+    facts = [
+        {
+            "wallet": WALLET,
+            "ts": 123,
+            "check_type": "positions_size",
+            "subject": "tok1",
+            "expected": "10",
+            "computed": "10",
+            "abs_diff": "0",
+            "pct_diff": "0",
+            "tolerance": "0.0001",
+            "status": "pass",
+            "source": "test",
+            "reason_code": "exact_match",
+            "notes": '{"local_present":true,"remote_present":true,"local_qty":"10"}',
+        },
+        {
+            "wallet": WALLET,
+            "ts": 123,
+            "check_type": "positions_avg_price_info",
+            "subject": "tok1",
+            "expected": "0.5",
+            "computed": "0.5",
+            "abs_diff": "0",
+            "pct_diff": "0",
+            "tolerance": "0.0001",
+            "status": "pass",
+            "source": "test",
+            "reason_code": "exact_match",
+            "notes": "{}",
+        },
+    ]
+    session.execute(
+        text(
+            "INSERT INTO reconciliation_facts "
+            "(wallet, ts, check_type, subject, expected, computed, abs_diff, pct_diff, "
+            "tolerance, status, source, reason_code, notes) "
+            "VALUES (:wallet, :ts, :check_type, :subject, :expected, :computed, :abs_diff, "
+            ":pct_diff, :tolerance, :status, :source, :reason_code, :notes)"
+        ),
+        facts,
+    )
+    session.commit()
+
+    result = CliRunner().invoke(main, ["reconcile", "status", "--wallet", WALLET])
+
+    assert result.exit_code == 0, result.output
+    assert "positions_avg_price_info (deprecated; use positions_wac_avg_price)" in result.output
+    assert "positions_avg_price_info:" not in result.output
+
+
 def test_incomplete_positions_fetch_persists_failure_and_untrusts(settings, session):
     result, trust = run_reconciliation(
         session,

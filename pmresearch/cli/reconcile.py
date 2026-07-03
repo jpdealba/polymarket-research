@@ -102,7 +102,7 @@ def _emit_result(result, trust: dict | None) -> None:
     click.echo("\n== Per-check status ==")
     for check_type, counts in result.check_status_counts().items():
         click.echo(
-            f"{check_type}: total={counts['total']} pass={counts.get('pass', 0)} "
+            f"{_display_check_type(check_type)}: total={counts['total']} pass={counts.get('pass', 0)} "
             f"warn={counts.get('warn', 0)} fail={counts.get('fail', 0)} "
             f"skip={counts.get('skip', 0)}"
         )
@@ -135,6 +135,12 @@ def _emit_result(result, trust: dict | None) -> None:
 
     click.echo("\n== realizedPnl discrepancies ==")
     _emit_oracle_discrepancies(result, "positions_realized_pnl")
+
+
+def _display_check_type(check_type: str) -> str:
+    if check_type == "positions_avg_price_info":
+        return "positions_avg_price_info (deprecated; use positions_wac_avg_price)"
+    return check_type
 
 
 def _emit_known_exceptions(result) -> None:
