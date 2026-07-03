@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..config import Settings
@@ -89,27 +90,66 @@ class RawStore:
         file_dir = self.settings.raw_dir / source / endpoint / wallet
         file_dir.mkdir(parents=True, exist_ok=True)
         file_path = file_dir / f"{ts}_{content_hash8}.json.gz"
-        with gzip.open(file_path, "wb") as fh:
-            fh.write(body)
+        suffix = 0
+        while True:
+            candidate = (
+                file_path
+                if suffix == 0
+                else file_dir / f"{ts}_{content_hash8}_{suffix}.json.gz"
+            )
+            try:
+                with gzip.open(candidate, "xb") as fh:
+                    fh.write(body)
+            except FileExistsError:
+                suffix += 1
+                continue
+            file_path = candidate
+            break
 
-        result = self.session.execute(
-            text(
-                "INSERT INTO raw_fetches "
-                "(source, endpoint, params_json, fetched_at, http_status, file_path, content_hash, row_count) "
-                "VALUES (:source, :endpoint, :params_json, :fetched_at, :http_status, :file_path, :content_hash, :row_count)"
-            ),
-            {
-                "source": source,
-                "endpoint": endpoint,
-                "params_json": params_json,
-                "fetched_at": fetched_at.isoformat(),
-                "http_status": http_status,
-                "file_path": str(file_path),
-                "content_hash": content_hash,
-                "row_count": row_count,
-            },
-        )
-        self.session.commit()
+        try:
+            result = self.session.execute(
+                text(
+                    "INSERT INTO raw_fetches "
+                    "(source, endpoint, params_json, fetched_at, http_status, file_path, content_hash, row_count) "
+                    "VALUES (:source, :endpoint, :params_json, :fetched_at, :http_status, :file_path, :content_hash, :row_count)"
+                ),
+                {
+                    "source": source,
+                    "endpoint": endpoint,
+                    "params_json": params_json,
+                    "fetched_at": fetched_at.isoformat(),
+                    "http_status": http_status,
+                    "file_path": str(file_path),
+                    "content_hash": content_hash,
+                    "row_count": row_count,
+                },
+            )
+            self.session.commit()
+        except IntegrityError:
+            self.session.rollback()
+            file_path.unlink(missing_ok=True)
+            existing = self.session.execute(
+                text(
+                    "SELECT id, file_path FROM raw_fetches "
+                    "WHERE source = :source AND endpoint = :endpoint "
+                    "AND params_json = :params_json AND content_hash = :content_hash"
+                ),
+                {
+                    "source": source,
+                    "endpoint": endpoint,
+                    "params_json": params_json,
+                    "content_hash": content_hash,
+                },
+            ).fetchone()
+            if existing is None:
+                raise
+            return RawFetchResult(
+                raw_fetch_id=existing.id,
+                file_path=Path(existing.file_path),
+                content_hash=content_hash,
+                row_count=row_count,
+                deduped=True,
+            )
 
         return RawFetchResult(
             raw_fetch_id=result.lastrowid,

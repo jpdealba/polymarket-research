@@ -47,7 +47,7 @@ from typing import Optional
 
 # The set of event types with a documented sign convention above. Anything
 # outside this set is still stored — never dropped — just with zero deltas.
-KNOWN_EVENT_TYPES = {"TRADE", "MERGE", "SPLIT", "REDEEM", "REWARD"}
+KNOWN_EVENT_TYPES = {"TRADE", "MERGE", "SPLIT", "REDEEM", "REWARD", "MAKER_REBATE", "TAKER_REBATE"}
 
 
 @dataclass(frozen=True)

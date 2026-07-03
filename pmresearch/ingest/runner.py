@@ -88,19 +88,20 @@ def run_ingest(session: Session, *, wallet: Optional[str] = None) -> IngestStats
 
     for raw_fetch in raw_fetches:
         rows = _load_payload(raw_fetch.file_path)
+        raw_events_inserted = 0
         for row in rows:
             row_wallet = (row.get("proxyWallet") or "").lower()
             event = parse_activity_row(row, wallet=row_wallet, raw_fetch_id=raw_fetch.id)
             events_seen += 1
             result = session.execute(_INSERT_SQL, _event_params(event, now))
             if result.rowcount:
-                events_inserted += 1
+                raw_events_inserted += 1
         session.execute(
             text("UPDATE raw_fetches SET ingested_at = :t WHERE id = :id"),
             {"t": now, "id": raw_fetch.id},
         )
-
-    session.commit()
+        session.commit()
+        events_inserted += raw_events_inserted
 
     return IngestStats(
         raw_fetches_processed=len(raw_fetches),

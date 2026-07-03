@@ -58,7 +58,7 @@ def parse_activity_row(row: dict, *, wallet: str, raw_fetch_id: int, source: str
                 wallet,
                 tx_hash,
             )
-    elif event_type == "REWARD":
+    elif event_type in {"REWARD", "MAKER_REBATE", "TAKER_REBATE"}:
         delta_usdc = usdc_size
         token_id = None
     elif event_type == "MERGE":

@@ -40,6 +40,20 @@ def test_sync_state_transitions(session):
     assert state.consecutive_failures == 0
 
 
+def test_backfill_checkpoint_is_monotonic_when_backfill_walks_backwards(session):
+    manager.add_wallet(session, "0xbeef")
+    manager.start_backfill(session, "0xbeef", high_bound=1_000)
+
+    manager.checkpoint_backfill(session, "0xbeef", cursor_ts=900)
+    assert manager.get_sync_state(session, "0xbeef").backfill_cursor_ts == 900
+
+    manager.checkpoint_backfill(session, "0xbeef", cursor_ts=950)
+    assert manager.get_sync_state(session, "0xbeef").backfill_cursor_ts == 900
+
+    manager.checkpoint_backfill(session, "0xbeef", cursor_ts=800)
+    assert manager.get_sync_state(session, "0xbeef").backfill_cursor_ts == 800
+
+
 def test_failure_increments_counter(session):
     manager.add_wallet(session, "0xccc")
 

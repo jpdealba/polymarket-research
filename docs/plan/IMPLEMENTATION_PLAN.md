@@ -160,6 +160,8 @@ If uniqueness is ambiguous, preserve the events and let reconciliation catch iss
 
 **Common failure modes:** Gamma returning stringified JSON fields (`outcomes`, `clobTokenIds` are JSON *strings* — verified) — parse defensively; condition_ids batching limits (chunk requests); markets deleted/renamed upstream (keep last-known row, log staleness); assuming outcome index order matches clobTokenIds order without asserting it.
 
+**Fee-attribution note (do not lose):** after Phase 3 metadata exists, add an explicit fee-attribution subphase before relying on category-level PnL claims. The current backfill/ingest only records Data-API cash flows and rebates as reported; it does **not** explicitly model fee schedules by market category/date. For RN1 analysis we need a small `fee_schedule`/rules layer keyed by effective date and category (notably sports fee regime starting 2026-03-30), then classify trades by Gamma category and compute estimated fees/gross-vs-net PnL. Phase 11 on-chain enrichment may provide actual per-fill `fee`; when available, actual fee should override any schedule estimate.
+
 **Prompt:** `Implement Phase 3 of IMPLEMENTATION_PLAN.md exactly as scoped. Descriptors must be label-agnostic (token index, never outcome strings). Run tests, then manual verification on RN1's markets and show markets stats including unclassified count. Commit when acceptance criteria pass.`
 
 ---

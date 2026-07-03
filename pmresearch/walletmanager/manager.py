@@ -183,7 +183,15 @@ def checkpoint_backfill(session: Session, address: str, *, cursor_ts: int) -> No
     """Record how far a backfill has walked back so far. On interruption, a
     retry resumes from here instead of re-walking already-covered history."""
     session.execute(
-        text("UPDATE sync_state SET backfill_cursor_ts = :c WHERE wallet = :a"),
+        text(
+            "UPDATE sync_state SET backfill_cursor_ts = "
+            "CASE "
+            "WHEN backfill_cursor_ts IS NULL THEN :c "
+            "WHEN :c < backfill_cursor_ts THEN :c "
+            "ELSE backfill_cursor_ts "
+            "END "
+            "WHERE wallet = :a"
+        ),
         {"a": address.lower(), "c": cursor_ts},
     )
     session.commit()
