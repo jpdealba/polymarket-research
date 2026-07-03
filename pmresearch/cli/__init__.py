@@ -15,6 +15,7 @@ from .episodes import episodes_group, replay_episodes
 from .fees import fees_group
 from .ingest import ingest_group, ledger_group
 from .markets import markets_group
+from .pnl import derive_group, pnl_group
 from .reconcile import reconcile_group, trust_group
 from .replay import holdings_group, replay_group
 from .sync import sync_group
@@ -37,6 +38,8 @@ main.add_command(holdings_group)
 main.add_command(reconcile_group)
 main.add_command(trust_group)
 main.add_command(episodes_group)
+main.add_command(derive_group)
+main.add_command(pnl_group)
 replay_group.add_command(replay_episodes)
 
 

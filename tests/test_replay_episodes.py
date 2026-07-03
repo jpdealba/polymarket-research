@@ -274,7 +274,7 @@ def test_episode_stats_and_cli_smoke(session, settings, monkeypatch):
     result = runner.invoke(main, ["replay", "episodes", "--wallet", wallet])
     assert result.exit_code == 0, result.output
     assert "1 episodes" in result.output
-    assert "understated until Phase 8" in result.output
+    assert "pmr derive run" in result.output
 
     result = runner.invoke(main, ["episodes", "stats", "--wallet", wallet])
     assert result.exit_code == 0, result.output

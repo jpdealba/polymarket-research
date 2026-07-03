@@ -33,6 +33,7 @@ WARN_REASONS = {
     "realized_pnl_trade_accounting_drift",
     "realized_pnl_merge_split_semantics",
     "realized_pnl_resolution_semantics",
+    "realized_pnl_post_phase8_drift",
     "wac_size_reconciliation_not_clean",
     "wac_timing_skew",
 }
@@ -535,7 +536,7 @@ def realized_vs_oracle_fact(
         local,
         remote,
         episode,
-        "realizedPnl is compared for the current open episode; Phase 8 will add redemption payouts",
+        "realizedPnl is compared for the current open episode after derived payouts are replayed",
     )
     if not _has_oracle_field(remote, "realizedPnl"):
         notes["oracle_field"] = "realizedPnl"
@@ -581,9 +582,12 @@ def realized_vs_oracle_fact(
         if timing_skew:
             reason = "timing_skew"
             notes["classification"] = "local_sync_or_oracle_timing_skew"
+        elif "REDEEM_PAYOUT" in event_types:
+            reason = "realized_pnl_post_phase8_drift"
+            notes["classification"] = "post_phase8_realized_pnl_drift"
         elif "REDEEM" in event_types:
             reason = "realized_pnl_resolution_semantics"
-            notes["classification"] = "expected_phase8_redemption_payout_gap"
+            notes["classification"] = "zero_redeem_without_derived_payout"
         elif event_types & {"MERGE", "SPLIT"}:
             reason = "realized_pnl_merge_split_semantics"
             notes["classification"] = "oracle_merge_split_semantics_may_differ"

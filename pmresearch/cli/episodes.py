@@ -11,8 +11,8 @@ from ..db.engine import get_session_factory
 from ..ledger.replay import ledger_wallets
 from ..projections.episodes import episode_stats, fetch_episodes, rebuild_episodes
 
-_PHASE8_CAVEAT = (
-    "Note: resolution-closed episode PnL is understated until Phase 8 derives "
+_DERIVED_CAVEAT = (
+    "Note: run `pmr derive run` after market sync to include zero-reported "
     "redemption proceeds."
 )
 
@@ -41,7 +41,7 @@ def replay_episodes(wallet: str | None) -> None:
                     "MERGE/SPLIT/REDEEM events skipped over "
                     f"{stats.unmapped_condition_ids} conditions without token metadata."
                 )
-        click.echo(_PHASE8_CAVEAT)
+        click.echo(_DERIVED_CAVEAT)
     finally:
         session.close()
 
@@ -76,7 +76,7 @@ def episodes_show(wallet: str, token_id: str | None, open_only: bool) -> None:
             f"events={consumed_count} token={row.token_id}"
         )
     click.echo(f"({len(rows)} rows)")
-    click.echo(_PHASE8_CAVEAT)
+    click.echo(_DERIVED_CAVEAT)
 
 
 @episodes_group.command("stats")
@@ -104,4 +104,4 @@ def episodes_stats(wallet: str) -> None:
         f"micro_episode_share={stats.micro_episode_share}"
     )
     click.echo(f"realized_pnl={stats.realized_pnl} reward_income={stats.reward_income}")
-    click.echo(_PHASE8_CAVEAT)
+    click.echo(_DERIVED_CAVEAT)

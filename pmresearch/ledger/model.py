@@ -24,8 +24,8 @@ Sign conventions (delta_shares / delta_usdc), applied in pmresearch.ingest.activ
       Same token_id-is-NULL reasoning as MERGE.
 
   REDEEM      = -shares / +usdc (as reported)
-      usdc_size is currently always 0 in the source feed for REDEEM rows —
-      true payout derivation (qty * resolution price) is deferred to Phase 8.
+      usdc_size is often 0 in the source feed for REDEEM rows —
+      Phase 8 appends a derived event for the missing payout when this is zero.
       token_id is NULL: the source gives no per-token attribution for REDEEM
       (only conditionId), and Phase 2 does not guess which token it was.
 
@@ -51,7 +51,16 @@ logger = logging.getLogger(__name__)
 
 # The set of event types with a documented sign convention above. Anything
 # outside this set is still stored — never dropped — just with zero deltas.
-KNOWN_EVENT_TYPES = {"TRADE", "MERGE", "SPLIT", "REDEEM", "REWARD", "MAKER_REBATE", "TAKER_REBATE"}
+KNOWN_EVENT_TYPES = {
+    "TRADE",
+    "MERGE",
+    "SPLIT",
+    "REDEEM",
+    "REDEEM_PAYOUT",
+    "REWARD",
+    "MAKER_REBATE",
+    "TAKER_REBATE",
+}
 
 _HEX_BODY_RE = re.compile(r"^[0-9a-fA-F]+$")
 

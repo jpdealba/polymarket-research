@@ -4,9 +4,9 @@ ADR 0003 fixes the convention: token-level flat-to-flat boundaries, weighted
 average cost, and no debounce. A zero crossing is therefore always a boundary,
 even when the next event re-enters the same token at the same timestamp.
 
-Resolution-close PnL is intentionally understated in Phase 6 because source
-REDEEM rows report zero proceeds. Phase 8 will add derived redemption proceeds
-and replay this disposable projection.
+Phase 8 adds derived REDEEM_PAYOUT rows for source-reported zero redemption
+cash legs; when those rows are present, resolution-close PnL includes the
+derived proceeds.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from ..ledger.replay import stream_events
 from .base import Projection
 
-EPISODES_PROJECTION_VERSION = 1
+EPISODES_PROJECTION_VERSION = 2
 MICRO_EPISODE_SECONDS = 60
 
 _ZERO = Decimal("0")
@@ -156,6 +156,37 @@ def _load_token_maps(session: Session) -> tuple[dict[str, list[str]], dict[str, 
     return condition_tokens, token_conditions
 
 
+def _load_resolution_prices(session: Session) -> dict[str, dict[str, Decimal]]:
+    rows = session.execute(
+        text(
+            "SELECT condition_id, resolution_prices_json FROM markets "
+            "WHERE resolution_prices_json IS NOT NULL"
+        )
+    ).fetchall()
+    out: dict[str, dict[str, Decimal]] = {}
+    for row in rows:
+        try:
+            payload = json.loads(row.resolution_prices_json or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        out[row.condition_id] = {
+            str(token_id): Decimal(str(price)) for token_id, price in payload.items()
+        }
+    return out
+
+
+def _derived_redeem_conditions(session: Session, wallet: str) -> set[str]:
+    rows = session.execute(
+        text(
+            "SELECT DISTINCT condition_id FROM wallet_events "
+            "WHERE wallet = :wallet AND event_type = 'REDEEM_PAYOUT' "
+            "AND is_derived = 1 AND condition_id IS NOT NULL"
+        ),
+        {"wallet": wallet.lower()},
+    ).fetchall()
+    return {row.condition_id for row in rows}
+
+
 def _row(episode: _Episode, close_ts: Optional[int], close_reason: str) -> dict:
     return {
         "wallet": episode.wallet,
@@ -182,6 +213,8 @@ def rebuild_episodes(
     """Drop and rebuild flat-to-flat episodes for one wallet from the ledger."""
     wallet = wallet.lower()
     condition_tokens, token_conditions = _load_token_maps(session)
+    resolution_prices = _load_resolution_prices(session)
+    derived_redeem_conditions = _derived_redeem_conditions(session, wallet)
 
     active: dict[str, _Episode] = {}
     rows: list[dict] = []
@@ -274,7 +307,7 @@ def rebuild_episodes(
                     Decimal(event.delta_usdc),
                 )
 
-        elif etype in ("SPLIT", "MERGE", "REDEEM"):
+        elif etype in ("SPLIT", "MERGE", "REDEEM", "REDEEM_PAYOUT"):
             tokens = condition_tokens.get(event.condition_id or "")
             if not tokens:
                 unmapped_condition_events += 1
@@ -298,7 +331,12 @@ def rebuild_episodes(
                         shares,
                         proceeds_per_token,
                     )
-            else:
+            elif etype == "REDEEM":
+                if (
+                    event.condition_id in derived_redeem_conditions
+                    and Decimal(event.delta_usdc) == _ZERO
+                ):
+                    continue
                 proceeds_per_token = Decimal(event.delta_usdc) / len(tokens)
                 for token_id in tokens:
                     episode = active.get(token_id)
@@ -311,6 +349,23 @@ def rebuild_episodes(
                         event.id,
                         episode.qty,
                         proceeds_per_token,
+                        reason="resolution",
+                        force_close=True,
+                    )
+            else:
+                prices = resolution_prices.get(event.condition_id or "", {})
+                for token_id in tokens:
+                    episode = active.get(token_id)
+                    if episode is None:
+                        continue
+                    proceeds = episode.qty * prices.get(token_id, _ZERO)
+                    apply_remove(
+                        token_id,
+                        event.condition_id,
+                        ts,
+                        event.id,
+                        episode.qty,
+                        proceeds,
                         reason="resolution",
                         force_close=True,
                     )
