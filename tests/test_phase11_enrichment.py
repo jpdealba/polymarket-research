@@ -268,29 +268,26 @@ def test_subgraph_only_end_to_end(settings, session):
     event_id = _seed_trade(session, wallet, tx=tx, token=token, delta_shares="10", key="a")
     session.commit()
 
+    fill_row = {
+        "id": "fill-1",
+        "transactionHash": tx,
+        "timestamp": "1700000000",
+        "orderHash": "0xorder",
+        "maker": wallet,
+        "taker": other,
+        "makerAssetId": token,
+        "takerAssetId": "0",
+        "makerAmountFilled": "10000000",
+        "takerAmountFilled": "10000000",
+        "fee": "50000",
+    }
+
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "data": {
-                    "orderFilledEvents": [
-                        {
-                            "id": "fill-1",
-                            "transactionHash": tx,
-                            "timestamp": "1700000000",
-                            "orderHash": "0xorder",
-                            "maker": wallet,
-                            "taker": other,
-                            "makerAssetId": token,
-                            "takerAssetId": "0",
-                            "makerAmountFilled": "10000000",
-                            "takerAmountFilled": "10000000",
-                            "fee": "50000",
-                        }
-                    ]
-                }
-            },
-        )
+        # The adapter runs one query per role; the wallet is the maker here, so
+        # only the maker query returns the fill (the taker query is empty).
+        query = request.read().decode()
+        rows = [fill_row] if "maker: $wallet" in query else []
+        return httpx.Response(200, json={"data": {"orderFilledEvents": rows}})
 
     client = httpx.Client(base_url="https://fake-subgraph", transport=httpx.MockTransport(handler))
     subgraph = SubgraphSource("https://fake-subgraph", client=client, sleep_fn=lambda s: None)
@@ -312,3 +309,25 @@ def test_subgraph_only_end_to_end(settings, session):
         {"w": wallet},
     ).fetchone()
     assert wm.subgraph_synced_to_ts == 1700000000
+
+
+def test_subgraph_graphql_error_raises_not_silent_zero(settings, session):
+    """A GraphQL `errors` payload (HTTP 200) must raise, never be swallowed as
+    zero fills — regression for the live 'or'-filter rejection that reported
+    fills=0 while the query was actually invalid."""
+    import pytest
+
+    from pmresearch.rawstore.store import RawStore
+    from pmresearch.sources.subgraph import SubgraphError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"errors": [{"message": "Cannot mix column filters with 'or' operator"}]},
+        )
+
+    client = httpx.Client(base_url="https://fake-subgraph", transport=httpx.MockTransport(handler))
+    subgraph = SubgraphSource("https://fake-subgraph", client=client, sleep_fn=lambda s: None)
+
+    with pytest.raises(SubgraphError):
+        subgraph.fetch_order_fills(RawStore(settings, session), "0xaaa")

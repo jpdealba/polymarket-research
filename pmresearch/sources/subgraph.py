@@ -1,11 +1,18 @@
 """Goldsky Polymarket orderbook-subgraph adapter (Phase 11).
 
-Queries `orderFilledEvents` for a wallet (as maker OR taker), paginated by a
-**(timestamp, id) cursor** — NOT a numeric offset. Goldsky/The-Graph throttle
-deep `skip`/offset paging, so we order by timestamp ascending and advance the
-cursor to the last (timestamp, id) seen, re-fetching only the boundary
-timestamp and de-duplicating by id (the same bounded-overlap trick the
-Data API adapter uses on its one-second window boundary).
+Queries `orderFilledEvents` for a wallet, paginated by a **(timestamp, id)
+cursor** — NOT a numeric offset. Goldsky/The-Graph throttle deep `skip`/offset
+paging, so we order by timestamp ascending and advance the cursor to the last
+(timestamp, id) seen, re-fetching only the boundary timestamp and de-duplicating
+by id (the same bounded-overlap trick the Data API adapter uses on its
+one-second window boundary).
+
+The wallet can be either the `maker` or the `taker` of a fill, so we run TWO
+separate paginated queries (one per role) and merge/dedupe by id. A single
+top-level `or:[{maker},{taker}]` filter is rejected/timed-out server-side by
+this subgraph (the `or` across two indexed columns is too expensive, and mixing
+`timestamp_gte` with `or` at the same level is a hard error), whereas each
+single-column `where:{role, timestamp_gte}` query is fast and index-backed.
 
 Every page (a GraphQL POST) is persisted to the Raw Store BEFORE it is parsed
 (source="subgraph", endpoint="orderFilledEvents").
@@ -38,31 +45,31 @@ AMOUNT_SCALE = Decimal(10) ** 6
 
 DEFAULT_PAGE_SIZE = 500
 
-_ORDER_FILLED_QUERY = """
-query OrderFills($first: Int!, $wallet: Bytes!, $sinceTs: BigInt!) {
-  orderFilledEvents(
-    first: $first
-    orderBy: timestamp
-    orderDirection: asc
-    where: {
-      timestamp_gte: $sinceTs
-      or: [{ maker: $wallet }, { taker: $wallet }]
-    }
-  ) {
-    id
-    transactionHash
-    timestamp
-    orderHash
-    maker
-    taker
-    makerAssetId
-    takerAssetId
-    makerAmountFilled
-    takerAmountFilled
-    fee
-  }
-}
-""".strip()
+# The wallet's two possible roles on a fill; each is queried separately.
+_ROLES = ("maker", "taker")
+
+
+class SubgraphError(RuntimeError):
+    """A GraphQL response carried an `errors` payload (never silently zeroed)."""
+
+
+def _order_filled_query(role: str) -> str:
+    """Per-role query. `role` is a trusted internal constant ('maker'/'taker'),
+    never user input — interpolated because GraphQL field names can't be
+    variables."""
+    return (
+        "query OrderFills($first: Int!, $wallet: Bytes!, $sinceTs: BigInt!) {"
+        "  orderFilledEvents("
+        "    first: $first"
+        "    orderBy: timestamp"
+        "    orderDirection: asc"
+        f"    where: {{ {role}: $wallet, timestamp_gte: $sinceTs }}"
+        "  ) {"
+        "    id transactionHash timestamp orderHash maker taker"
+        "    makerAssetId takerAssetId makerAmountFilled takerAmountFilled fee"
+        "  }"
+        "}"
+    )
 
 
 def to_shares(amount_6dec: str | int) -> Decimal:
@@ -161,7 +168,12 @@ class SubgraphSource:
         kwargs = {}
         if sleep_fn is not None:
             kwargs["sleep_fn"] = sleep_fn
-        # The GraphQL endpoint is the full URL; POST to it directly ("").
+        # POST to the ABSOLUTE endpoint URL, not a relative "" path: httpx joins
+        # base_url + "" into ".../gn/" (trailing slash), and that route does NOT
+        # reach the GraphQL resolver — it returns {"message": ...} with no data,
+        # which would look like "zero fills". An absolute request URL bypasses
+        # base_url joining and hits the endpoint exactly.
+        self._url = url
         self._adapter = SourceAdapter(url, client=client, retry=retry, **kwargs)
         self.page_size = page_size
 
@@ -178,34 +190,55 @@ class SubgraphSource:
         self, raw_store: RawStore, wallet: str, *, since_ts: int = 0
     ) -> SubgraphFetch:
         """Fetch every orderFilledEvent for `wallet` at or after `since_ts`,
-        paginating by the (timestamp, id) cursor. Each page is raw-stored."""
+        as maker and as taker (two paginated queries), merged and deduped by id.
+        Each page is raw-stored before parsing."""
         wallet = wallet.lower()
         fills: list[OrderFill] = []
         seen_ids: set[str] = set()
         requests_made = 0
+        head_ts = 0
+
+        for role in _ROLES:
+            requests, role_head = self._fetch_role(
+                raw_store, wallet, role, since_ts, fills, seen_ids
+            )
+            requests_made += requests
+            head_ts = max(head_ts, role_head)
+
+        return SubgraphFetch(tuple(fills), head_ts, requests_made)
+
+    def _fetch_role(
+        self,
+        raw_store: RawStore,
+        wallet: str,
+        role: str,
+        since_ts: int,
+        fills: list["OrderFill"],
+        seen_ids: set[str],
+    ) -> tuple[int, int]:
+        """Paginate one role's query, appending new fills into `fills`/`seen_ids`.
+        Returns (requests_made, head_ts) for this role."""
+        query = _order_filled_query(role)
         cursor_ts = since_ts
+        requests_made = 0
         head_ts = 0
 
         while True:
-            variables = {
-                "first": self.page_size,
-                "wallet": wallet,
-                "sinceTs": cursor_ts,
-            }
-            body = {"query": _ORDER_FILLED_QUERY, "variables": variables}
-            response, payload = self._adapter.post_json("", body)
+            variables = {"first": self.page_size, "wallet": wallet, "sinceTs": cursor_ts}
+            body = {"query": query, "variables": variables}
+            response, payload = self._adapter.post_json(self._url, body)
             response.raise_for_status()
             raw_store.persist(
                 source="subgraph",
                 endpoint="orderFilledEvents",
                 wallet=wallet,
-                params=variables,
+                params={**variables, "role": role},
                 payload=payload if payload is not None else {},
                 http_status=response.status_code,
             )
             requests_made += 1
 
-            rows = _rows(payload)
+            rows = _rows(payload)  # raises SubgraphError on a GraphQL error payload
             new_rows = [row for row in rows if str(row.get("id", "")) not in seen_ids]
             for row in new_rows:
                 fill = _parse_fill(row)
@@ -216,25 +249,30 @@ class SubgraphSource:
             if len(rows) < self.page_size:
                 break  # last page
 
-            # Advance cursor to the newest timestamp on this page; re-fetch that
-            # boundary second next round (deduped by id above).
             page_max_ts = max(int(row["timestamp"]) for row in rows)
             if page_max_ts <= cursor_ts and not new_rows:
                 logger.warning(
-                    "Subgraph pagination for %s stalled at ts=%d (page full but "
+                    "Subgraph %s pagination for %s stalled at ts=%d (page full but "
                     "no forward progress); stopping to avoid an infinite loop.",
+                    role,
                     wallet,
                     cursor_ts,
                 )
                 break
             cursor_ts = page_max_ts
 
-        return SubgraphFetch(tuple(fills), head_ts, requests_made)
+        return requests_made, head_ts
 
 
 def _rows(payload: object) -> list[dict]:
     if not isinstance(payload, dict):
         return []
+    # A GraphQL error (bad filter, subgraph timeout, schema drift) comes back as
+    # HTTP 200 with an `errors` array and a null `data`. Never silently treat
+    # that as "zero fills" (ADR 0006) — raise so the caller/operator sees it.
+    errors = payload.get("errors")
+    if errors:
+        raise SubgraphError(f"Subgraph returned GraphQL errors: {errors}")
     data = payload.get("data")
     if not isinstance(data, dict):
         return []
