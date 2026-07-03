@@ -4,7 +4,9 @@ import pytest
 from sqlalchemy import text
 
 from pmresearch.ingest import runner
+from pmresearch.ingest.activity import parse_activity_row
 from pmresearch.ingest.runner import reparse_wallet, run_ingest
+from pmresearch.ledger.model import normalize_condition_id
 from pmresearch.rawstore.store import RawStore
 
 GOLDEN_WALLET = "0xabc0000000000000000000000000000000000a"
@@ -300,3 +302,46 @@ def test_ingest_commits_progress_per_raw_fetch(settings, session, monkeypatch):
         text("SELECT COUNT(*) FROM wallet_events WHERE wallet = :w"), {"w": GOLDEN_WALLET}
     ).scalar()
     assert count == 1
+
+
+def test_normalize_condition_id_bytea_prefix_to_0x():
+    assert normalize_condition_id("\\x" + "ab" * 32) == "0x" + "ab" * 32
+
+
+def test_normalize_condition_id_lowercases_and_is_idempotent():
+    mixed = "0x" + "AbCd" * 16
+    normalized = normalize_condition_id(mixed)
+    assert normalized == mixed.lower()
+    assert normalize_condition_id(normalized) == normalized
+
+
+def test_normalize_condition_id_none_passthrough():
+    assert normalize_condition_id(None) is None
+
+
+def test_normalize_condition_id_malformed_preserved_not_dropped():
+    # Doesn't match the recognized 0x/\x + hex shapes — preserved as-is
+    # rather than nulled or invented (same policy as unrecognized event
+    # types in ledger/model.py).
+    assert normalize_condition_id("0xcond1") == "0xcond1"
+
+
+def test_parse_activity_row_trade_0x_condition_id_stays_0x():
+    row = dict(GOLDEN_ROWS[0])
+    row["conditionId"] = "0x" + "cd" * 32
+    event = parse_activity_row(row, wallet=GOLDEN_WALLET, raw_fetch_id=1)
+    assert event.condition_id == "0x" + "cd" * 32
+
+
+def test_parse_activity_row_merge_bytea_condition_id_becomes_0x():
+    row = dict(GOLDEN_ROWS[2])  # MERGE
+    row["conditionId"] = "\\x" + "de" * 32
+    event = parse_activity_row(row, wallet=GOLDEN_WALLET, raw_fetch_id=1)
+    assert event.condition_id == "0x" + "de" * 32
+
+
+def test_parse_activity_row_redeem_bytea_condition_id_becomes_0x():
+    row = dict(GOLDEN_ROWS[3])  # REDEEM
+    row["conditionId"] = "\\x" + "fa" * 32
+    event = parse_activity_row(row, wallet=GOLDEN_WALLET, raw_fetch_id=1)
+    assert event.condition_id == "0x" + "fa" * 32

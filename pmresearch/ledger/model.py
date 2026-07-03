@@ -41,13 +41,43 @@ Sign conventions (delta_shares / delta_usdc), applied in pmresearch.ingest.activ
 
 from __future__ import annotations
 
+import logging
+import re
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional
 
+logger = logging.getLogger(__name__)
+
 # The set of event types with a documented sign convention above. Anything
 # outside this set is still stored — never dropped — just with zero deltas.
 KNOWN_EVENT_TYPES = {"TRADE", "MERGE", "SPLIT", "REDEEM", "REWARD", "MAKER_REBATE", "TAKER_REBATE"}
+
+_HEX_BODY_RE = re.compile(r"^[0-9a-fA-F]+$")
+
+
+def normalize_condition_id(condition_id: Optional[str]) -> Optional[str]:
+    """Canonicalize a condition_id to lowercase Ethereum hex form ("0x...").
+
+    The Data API reports MERGE/REDEEM/CONVERSION rows' conditionId as a
+    Postgres bytea literal ("\\xdead...") rather than the "0x..." form used
+    by TRADE rows and by Gamma market metadata — same underlying bytes,
+    different textual prefix (observed live against RN1: 230/232 ledger
+    conditions with no matching market were this, not genuinely missing
+    metadata). This rewrites that one known-equivalent encoding; anything
+    else that isn't valid hex under a recognized prefix is preserved as-is
+    with a logged warning — same "never silently invented, never dropped"
+    policy as unrecognized event types above.
+    """
+    if condition_id is None:
+        return None
+    if condition_id.startswith("0x") or condition_id.startswith("\\x"):
+        body = condition_id[2:]
+        if _HEX_BODY_RE.match(body):
+            return "0x" + body.lower()
+        logger.warning("Malformed condition_id %r; preserving as-is.", condition_id)
+        return condition_id
+    return condition_id
 
 
 @dataclass(frozen=True)

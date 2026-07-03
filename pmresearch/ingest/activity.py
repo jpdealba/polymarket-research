@@ -11,7 +11,7 @@ import hashlib
 import logging
 from decimal import Decimal
 
-from ..ledger.model import WalletEvent
+from ..ledger.model import WalletEvent, normalize_condition_id
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ def parse_activity_row(row: dict, *, wallet: str, raw_fetch_id: int, source: str
     usdc_size = Decimal(str(row.get("usdcSize", 0)))
     ts = int(row["timestamp"])
     tx_hash = row["transactionHash"]
-    condition_id = row.get("conditionId") or None
+    condition_id = normalize_condition_id(row.get("conditionId") or None)
 
     delta_shares = Decimal(0)
     delta_usdc = Decimal(0)

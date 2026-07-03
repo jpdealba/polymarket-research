@@ -1,0 +1,376 @@
+$WALLET = "0x2005d16a84ceefa912d4e380cd32e7ff827875ea"
+
+1- Estado base: versión, DB y conteos
+
+	➜ pmr version
+	0.1.0
+	➜ pmr db current
+	Current revision(s) for sqlite:///C:/Users/jpdealba/Documents/Programacion/personal/polymarket-research/data/db/pmresearch.db:
+	Rev: m0006 (head)
+	Parent: m0005
+	Path: C:\Users\jpdealba\Documents\Programacion\personal\polymarket-research\alembic\versions\m0006_holdings.py
+		holdings projection
+		Revision ID: m0006
+		Revises: m0005
+		Create Date: 2026-07-03
+
+
+2- Revalidar que Phase 3 sigue cubierta
+
+	➜ pmr markets stats
+	markets_total=83679
+	resolved=83637
+	unclassified_descriptors=0
+	ledger_conditions_missing_market=232
+
+	➜ sqlite3 -header -column data/db/pmresearch.db "
+	> SELECT COUNT(DISTINCT we.condition_id) AS missing_conditions
+	> FROM wallet_events we
+	> LEFT JOIN markets m ON m.condition_id = we.condition_id
+	> WHERE we.condition_id IS NOT NULL
+	>   AND m.condition_id IS NULL;
+	> "
+	missing_conditions
+	------------------
+	232
+
+	➜ sqlite3 -header -column data/db/pmresearch.db "
+	> SELECT COUNT(DISTINCT we.token_id) AS missing_tokens
+	> FROM wallet_events we
+	> LEFT JOIN tokens t ON t.token_id = we.token_id
+	> WHERE we.token_id IS NOT NULL
+	>   AND t.token_id IS NULL;
+	> "
+	missing_tokens
+	--------------
+	1
+
+
+3- Correr Phase 4 desde cero
+	➜ pmr replay holdings --wallet $WALLET
+	2026-07-03 06:26:03,188 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=76229689047948931418180233048083383826117210220853253452352847599071207459112 qty=-1.684577 event_id=3818046) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,191 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=101393174109748408035025635231172891508670451994879607559773565350110378649757 qty=-2.605725 event_id=3817607) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,191 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=79345898043879674968536606089156179114850342701712936585061239883547190289241 qty=-42.635072 event_id=3817607) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,192 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=57488038944206426560126973132729839587970905415200897549330582130866496204373 qty=-62.422039 event_id=3817608) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,193 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=61184360137552058168825966145268658560224167645351953588961564652759741113469 qty=-40.000000 event_id=3817472) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,201 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=33562113160682019583776693257324750845153435100719395317947913575392812416117 qty=-40.000000 event_id=3816148) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,204 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=57435543096474820905998352576051942793799411187668331797701902389664297040707 qty=-80 event_id=3815777) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,204 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=52536134813112715074397969612415180789901613672649629222432265416276975826918 qty=-50 event_id=3815736) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,232 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=107718466188417126243325227794394590503812727367012992254212839581096906599009 qty=-100.000 event_id=3811237) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,263 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=63477734328905924425360404629206818995688631859733355695664983506659982441336 qty=-250.000000 event_id=3806471) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,265 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=33052931245902365112970817162776584648241837443343839250265640876517687983078 qty=-250.000000 event_id=3806356) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,265 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=33529766007080844177020481990958365558619953152022496999123491856425810699390 qty=-66.957400 event_id=3806357) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,265 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=31599686637886807355816933383633564152504662459477454619710534729898826371441 qty=-65.658782 event_id=3806359) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,277 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=27423095136061777286856542670284426930876104516651550750642690501675065131957 qty=-2.43 event_id=3804626) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,278 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=93967577771423497494036160670049910456996329527408067127580568348908994385346 qty=-5.000000 event_id=3804632) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,278 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=57284879485232373554423733319615277541637835036667117093729772824810042636333 qty=-182.549513 event_id=3804519) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,279 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=99448049340504683412355918977276450798698948425332447449758328257461612313652 qty=-500 event_id=3804460) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,279 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=70226295932982609361804743828965978642815366806781777592455118815979880495113 qty=-290.357359 event_id=3804460) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,307 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=16643048880019456323421174757407582892002560952311714440367106291613601727545 qty=-182.284378 event_id=3801077) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,307 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=3474368010234224970636780179263122624800495572448697103837762434303457861006 qty=-679.612242 event_id=3801079) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,307 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=97278070081217689998227720555485378570703348220935503195830673099389983687746 qty=-509.023213 event_id=3801081) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,307 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=17406587560785045487309193893506065710411393212257143010349174530842367031491 qty=-143.35000 event_id=3801082) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,307 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=7602751620730165678262712506162872875106053163646936340591284396090365551339 qty=-87.196435 event_id=3801084) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,308 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=7421888366398132194808786549992736196904367062394618758475466752836597055324 qty=-8.770000 event_id=3801085) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:03,323 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=113004896391848346313156573711537989076882765054135310752742907560125829337036 qty=-1.222567 event_id=3798558) — likely missed events upstream; not clamped.
+	2026-07-03 06:26:34,736 WARNING pmresearch.projections.holdings: Data quality: 318 MERGE/SPLIT/REDEEM events over 230 conditions without token metadata were skipped (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea, sample=['\\x013578d2c3dfef0d553dfab39fbfe9a6f06405d03670e6beb68acdf65f9d810a', '\\x018e42fb3558a5daf41ead1d27f9de61a8cfaa5cccde8ecc8224ae9a753014c6', '\\x01d5070e38b56a562bc24e9bb0441adb1940b6caaecbe8bb1d5f33dea23380df', '\\x02106a9b021faa1430a4ec341bd2465d4b7e2338b88169ba1dd6f21e1949c02d', '\\x022a1fa3f502b806de76ea5ed37ee6c9153d852b3ba4d63e8e654aa7999c4403']) — run `pmr markets sync`.
+	2026-07-03 06:26:35,012 WARNING pmresearch.projections.holdings: Data quality: 135 tokens ended with negative holdings for wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea.
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea: 3818906 events -> 148130 tokens (26364 nonzero), as_of_ts=1783078267
+	data-quality: 135 tokens ended negative (525 negative-qty events); 318 MERGE/SPLIT/REDEEM events skipped over 230 conditions without token metadata.
+
+
+	6:27:03
+	➜ pmr replay holdings --wallet $WALLET
+	2026-07-03 06:27:05,516 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=76229689047948931418180233048083383826117210220853253452352847599071207459112 qty=-1.684577 event_id=3818046) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,519 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=101393174109748408035025635231172891508670451994879607559773565350110378649757 qty=-2.605725 event_id=3817607) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,519 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=79345898043879674968536606089156179114850342701712936585061239883547190289241 qty=-42.635072 event_id=3817607) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,519 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=57488038944206426560126973132729839587970905415200897549330582130866496204373 qty=-62.422039 event_id=3817608) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,521 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=61184360137552058168825966145268658560224167645351953588961564652759741113469 qty=-40.000000 event_id=3817472) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,530 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=33562113160682019583776693257324750845153435100719395317947913575392812416117 qty=-40.000000 event_id=3816148) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,533 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=57435543096474820905998352576051942793799411187668331797701902389664297040707 qty=-80 event_id=3815777) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,533 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=52536134813112715074397969612415180789901613672649629222432265416276975826918 qty=-50 event_id=3815736) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,564 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=107718466188417126243325227794394590503812727367012992254212839581096906599009 qty=-100.000 event_id=3811237) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,595 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=63477734328905924425360404629206818995688631859733355695664983506659982441336 qty=-250.000000 event_id=3806471) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,597 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=33052931245902365112970817162776584648241837443343839250265640876517687983078 qty=-250.000000 event_id=3806356) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,597 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=33529766007080844177020481990958365558619953152022496999123491856425810699390 qty=-66.957400 event_id=3806357) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,597 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=31599686637886807355816933383633564152504662459477454619710534729898826371441 qty=-65.658782 event_id=3806359) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,609 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=27423095136061777286856542670284426930876104516651550750642690501675065131957 qty=-2.43 event_id=3804626) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,610 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=93967577771423497494036160670049910456996329527408067127580568348908994385346 qty=-5.000000 event_id=3804632) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,611 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=57284879485232373554423733319615277541637835036667117093729772824810042636333 qty=-182.549513 event_id=3804519) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,611 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=99448049340504683412355918977276450798698948425332447449758328257461612313652 qty=-500 event_id=3804460) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,611 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=70226295932982609361804743828965978642815366806781777592455118815979880495113 qty=-290.357359 event_id=3804460) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,634 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=16643048880019456323421174757407582892002560952311714440367106291613601727545 qty=-182.284378 event_id=3801077) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,634 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=3474368010234224970636780179263122624800495572448697103837762434303457861006 qty=-679.612242 event_id=3801079) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,634 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=97278070081217689998227720555485378570703348220935503195830673099389983687746 qty=-509.023213 event_id=3801081) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,635 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=17406587560785045487309193893506065710411393212257143010349174530842367031491 qty=-143.35000 event_id=3801082) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,635 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=7602751620730165678262712506162872875106053163646936340591284396090365551339 qty=-87.196435 event_id=3801084) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,635 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=7421888366398132194808786549992736196904367062394618758475466752836597055324 qty=-8.770000 event_id=3801085) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:05,650 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=113004896391848346313156573711537989076882765054135310752742907560125829337036 qty=-1.222567 event_id=3798558) — likely missed events upstream; not clamped.
+	2026-07-03 06:27:29,748 WARNING pmresearch.projections.holdings: Data quality: 318 MERGE/SPLIT/REDEEM events over 230 conditions without token metadata were skipped (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea, sample=['\\x013578d2c3dfef0d553dfab39fbfe9a6f06405d03670e6beb68acdf65f9d810a', '\\x018e42fb3558a5daf41ead1d27f9de61a8cfaa5cccde8ecc8224ae9a753014c6', '\\x01d5070e38b56a562bc24e9bb0441adb1940b6caaecbe8bb1d5f33dea23380df', '\\x02106a9b021faa1430a4ec341bd2465d4b7e2338b88169ba1dd6f21e1949c02d', '\\x022a1fa3f502b806de76ea5ed37ee6c9153d852b3ba4d63e8e654aa7999c4403']) — run `pmr markets sync`.
+	2026-07-03 06:27:30,008 WARNING pmresearch.projections.holdings: Data quality: 135 tokens ended with negative holdings for wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea.
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea: 3818906 events -> 148130 tokens (26364 nonzero), as_of_ts=1783078267
+	data-quality: 135 tokens ended negative (525 negative-qty events); 318 MERGE/SPLIT/REDEEM events skipped over 230 conditions without token metadata.
+
+
+	(.venv)  ~\Documents\Programacion\personal\polymarket-research :: main ≡  ?1              |  polymarket-research | 06:28:02
+	➜ pmr replay holdings --wallet $WALLET
+	2026-07-03 06:28:04,604 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=76229689047948931418180233048083383826117210220853253452352847599071207459112 qty=-1.684577 event_id=3818046) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,607 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=101393174109748408035025635231172891508670451994879607559773565350110378649757 qty=-2.605725 event_id=3817607) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,607 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=79345898043879674968536606089156179114850342701712936585061239883547190289241 qty=-42.635072 event_id=3817607) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,607 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=57488038944206426560126973132729839587970905415200897549330582130866496204373 qty=-62.422039 event_id=3817608) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,608 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=61184360137552058168825966145268658560224167645351953588961564652759741113469 qty=-40.000000 event_id=3817472) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,616 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=33562113160682019583776693257324750845153435100719395317947913575392812416117 qty=-40.000000 event_id=3816148) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,619 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=57435543096474820905998352576051942793799411187668331797701902389664297040707 qty=-80 event_id=3815777) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,619 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=52536134813112715074397969612415180789901613672649629222432265416276975826918 qty=-50 event_id=3815736) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,648 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=107718466188417126243325227794394590503812727367012992254212839581096906599009 qty=-100.000 event_id=3811237) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,679 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=63477734328905924425360404629206818995688631859733355695664983506659982441336 qty=-250.000000 event_id=3806471) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,680 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=33052931245902365112970817162776584648241837443343839250265640876517687983078 qty=-250.000000 event_id=3806356) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,680 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=33529766007080844177020481990958365558619953152022496999123491856425810699390 qty=-66.957400 event_id=3806357) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,680 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=31599686637886807355816933383633564152504662459477454619710534729898826371441 qty=-65.658782 event_id=3806359) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,691 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=27423095136061777286856542670284426930876104516651550750642690501675065131957 qty=-2.43 event_id=3804626) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,692 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=93967577771423497494036160670049910456996329527408067127580568348908994385346 qty=-5.000000 event_id=3804632) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,693 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=57284879485232373554423733319615277541637835036667117093729772824810042636333 qty=-182.549513 event_id=3804519) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,693 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=99448049340504683412355918977276450798698948425332447449758328257461612313652 qty=-500 event_id=3804460) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,693 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=70226295932982609361804743828965978642815366806781777592455118815979880495113 qty=-290.357359 event_id=3804460) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,715 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=16643048880019456323421174757407582892002560952311714440367106291613601727545 qty=-182.284378 event_id=3801077) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,715 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=3474368010234224970636780179263122624800495572448697103837762434303457861006 qty=-679.612242 event_id=3801079) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,715 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=97278070081217689998227720555485378570703348220935503195830673099389983687746 qty=-509.023213 event_id=3801081) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,716 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=17406587560785045487309193893506065710411393212257143010349174530842367031491 qty=-143.35000 event_id=3801082) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,716 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=7602751620730165678262712506162872875106053163646936340591284396090365551339 qty=-87.196435 event_id=3801084) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,716 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=7421888366398132194808786549992736196904367062394618758475466752836597055324 qty=-8.770000 event_id=3801085) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:04,732 WARNING pmresearch.projections.holdings: Data quality: holdings went negative (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea token=113004896391848346313156573711537989076882765054135310752742907560125829337036 qty=-1.222567 event_id=3798558) — likely missed events upstream; not clamped.
+	2026-07-03 06:28:28,930 WARNING pmresearch.projections.holdings: Data quality: 318 MERGE/SPLIT/REDEEM events over 230 conditions without token metadata were skipped (wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea, sample=['\\x013578d2c3dfef0d553dfab39fbfe9a6f06405d03670e6beb68acdf65f9d810a', '\\x018e42fb3558a5daf41ead1d27f9de61a8cfaa5cccde8ecc8224ae9a753014c6', '\\x01d5070e38b56a562bc24e9bb0441adb1940b6caaecbe8bb1d5f33dea23380df', '\\x02106a9b021faa1430a4ec341bd2465d4b7e2338b88169ba1dd6f21e1949c02d', '\\x022a1fa3f502b806de76ea5ed37ee6c9153d852b3ba4d63e8e654aa7999c4403']) — run `pmr markets sync`.
+	2026-07-03 06:28:29,196 WARNING pmresearch.projections.holdings: Data quality: 135 tokens ended with negative holdings for wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea.
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea: 3818906 events -> 148130 tokens (26364 nonzero), as_of_ts=1783078267
+	data-quality: 135 tokens ended negative (525 negative-qty events); 318 MERGE/SPLIT/REDEEM events skipped over 230 conditions without token metadata.
+
+
+3.5- Fee
+	➜ pmr fees report --wallet 0x2005d16a84ceefa912d4e380cd32e7ff827875ea --by-category
+	wallet_events remains gross/base Data-API cashflow. Fees are schedule estimates or taker worst-case until Phase 11 maker/taker fill enrichment; actual_fee and actual_net_pnl are unavailable when not enriched.
+	total_trades=3699456
+	category_classified_trades=3695514
+	fee_estimated_trades=2010935
+	unknown_category_trades=3942
+	actual_enriched_trades=0
+	period=all category=sports buy_volume=385505486.758606000016836576 gross_pnl=9208258.242970999983162424 estimated_fee=1262382.9925 worst_case_fee=1262382.9925 estimated_net_pnl=7945875.250470999983162424 actual_fee=n/a actual_net_pnl=n/a gross_roi=0.02388619243890809658010923038 estimated_net_roi=0.02061157499282626427735825947
+	period=all category=unclassified buy_volume=240018.6210650000000056 gross_pnl=1525789.93258499999897912 estimated_fee=0 worst_case_fee=0 estimated_net_pnl=1525789.93258499999897912 actual_fee=n/a actual_net_pnl=n/a gross_roi=6.356964829707097121487751919 estimated_net_roi=6.356964829707097121487751919
+
+
+4- Ver holdings actuales
+
+	...
+	qty=          0.000095 wac=0.6225690793 as_of=1782236302 | Map Handicap: SHK (-1.5) vs Eternal Fire (+1.5) [Sharks] token=96891893861750736869670367439057804564247675976083679394087353011793867799499
+	qty=       5687.339582 wac=0.3005590215 as_of=1768666650 | Will Bayer 04 Leverkusen win on 2026-01-17? [Yes] token=96893517105280292187052375975201446273635322016810137156059625284086695958818
+	qty=         96.012621 wac=0.2297488621 as_of=1757278704 | Will Poland win on 2025-09-07? [No] token=96893612263480699714990096290145062320240447064443770924922983355607521593235
+	qty=         23.237507 wac=0.2709779003 as_of=1776519810 | Spezia Calcio vs. FC Südtirol: O/U 1.5 [Under] token=96897513893092268170951688369367726980790608415017393868841290340429602949346
+	qty=          0.091129 wac=0.8528895810 as_of=1775945713 | Will Sporting CP win on 2026-04-11? [Yes] token=96898772129585101925877684695807771447728395559096872684551711473773297707732
+	qty=               225 wac=        0.05 as_of=1770801251 | Spurs vs. Lakers: O/U 222.5 [Under] token=97244122516020606374041694651641582078616081984433803511626549336551120539139
+	qty=       4989.746989 wac=0.2803196904 as_of=1777831888 | Manchester United FC vs. Liverpool FC: Both Teams to Score [No] token=97246288300821046013608285615991012931388429271548016991102628916567146782049
+	qty=       7597.769515 wac=0.3834616641 as_of=1775923179 | Will Swansea City AFC win on 2026-04-11? [No] token=97254905229525848641766568993860636088907875995683350178483415691653129487412
+	qty=        872.001888 wac=0.4189673165 as_of=1765155437 | Lakers vs. 76ers: O/U 235.5 [Over] token=97255023965972627384582154529879906096367083439492915955486514848702590670776
+	qty=      17469.988399 wac=0.6109055651 as_of=1778336218 | Guangdong Southern Tigers vs. Beijing Ducks [Beijing Ducks] token=97263587082713116373389654470300361165424162698822001063616609895474473015717
+	qty=           1373.31 wac=0.0600386657 as_of=1757227324 | Will Belgium win on 2025-09-07? [No] token=97266388533366706469363288057666337646085702411670238969170353865417866263106
+	qty=             54.61 wac=       0.001 as_of=1773974799 | Will CDP Junior FC win on 2026-03-19? [Yes] token=97268493193795108154572323400000984861850098477741164082304187179968784194824
+	qty=                66 wac=0.5151515151 as_of=1775917997 | Heart of Midlothian FC vs. Motherwell FC: O/U 2.5 [Under] token=97269503767932777138386298210912042397366906941668795717254964235174754041897
+	qty=       1151.774194 wac=0.2351645951 as_of=1777827556 | Real Betis Balompié vs. Real Oviedo: O/U 1.5 [Under] token=97275490563942732519815416170547527276920917934525418279247410879789864443786
+	qty=        175.691537 wac=0.1247186576 as_of=1773457009 | Spread: St. John's Red Storm (-7.5) [Seton Hall Pirates] token=97285093377803754851572057227333678508767493409237061317418406569039692466329
+	qty=        315.074349 wac=0.0810513180 as_of=1776009745 | Will AZ win on 2026-04-12? [No] token=97295042123150476214108376220045327934484636286261117599960544003806101623847
+	qty=          0.000075 wac=0.9541766487 as_of=1775923181 | Will Charlton Athletic FC win on 2026-04-11? [No] token=9729711561108349718110502732226425475400701912076962359878047658420770303266
+	qty=          3.871537 wac=0.4800000165 as_of=1768059780 | AC Reggiana 1919 vs. Venezia FC: O/U 2.5 [Under] token=97299084478415307602747051702567831145825910666371805475906265868103881051806
+	qty=               131 wac=0.3467319847 as_of=1779931708 | Spread: New York Mets (-2.5) [New York Mets] token=97310558833531714460933021897447628142043329476105272904010093150860553877310
+	qty=          0.000043 wac=0.7619828687 as_of=1778336222 | Counter-Strike: FURIA vs Monte - Map 2 Winner [FURIA] token=9731232847858688077210805079455202735322279783406774079662966983636963029465
+	qty=            533.99 wac=0.0147744339 as_of=1771609406 | Set 1 Winner: Alcaraz vs Rublev [Rublev] token=97316674124335241821544880520841692661383901407121073554317642939798158114037
+	qty=           5809.01 wac=        0.52 as_of=1771777454 | Spread: Seattle Sounders FC (-1.5) [Colorado Rapids SC] token=9731725171433445166288220404334332342176773713429000868540842258819743067661
+	qty=        940.410972 wac=0.3619803310 as_of=1765770463 | Lakers vs. Suns: O/U 228.5 [Under] token=97321201828365233348945475236344179750053008545544432602792353434089993788000
+	qty=          0.000073 wac=0.5864315024 as_of=1778417374 | Celtic FC vs. Rangers FC: O/U 3.5 [Over] token=97324099236618155986457576077772130270796796546298779895425011106549187279998
+	qty=         26.948276 wac=0.4365577226 as_of=1775321549 | FC Argeș Pitești vs. Dinamo 1948: O/U 1.5 [Under] token=97325289996523344072481610353581363932380677904797210315999939723547235681552
+	qty=         17.957422 wac=0.1608165136 as_of=1781142121 | Spread: Atlanta Braves (-2.5) [Atlanta Braves] token=97325313166914991153904058711610409835924475173466916994797491606641511407533
+	qty=               315 wac=0.0385714285 as_of=1780865529 | Cincinnati Reds vs. St. Louis Cardinals: O/U 11.5 [Over] token=97339241935870448922466347594476752748640284308600184098049529921227798075058
+	qty=          0.000033 wac=0.7226371157 as_of=1771083667 | Alanyaspor vs. Konyaspor: O/U 2.5 [Under] token=97339347727484314476970961835786821337611478895333118311463943609356084513165
+	qty=        748.794835 wac=0.1179847626 as_of=1765047141 | Will RB Leipzig win on 2025-12-06? [No] token=97350620251402438086920176271664471130320317785344851615149613998730754647571
+	qty=       6268.650285 wac=0.1493949713 as_of=1774107447 | FC Bayern München vs. 1. FC Union Berlin: O/U 1.5 [Under] token=97358394294980725245767240843456293278668693211551459081578706220476627274159
+	qty=         247.76595 wac=0.0589909832 as_of=1777832686 | Will Al Okhdood SC win on 2026-05-03? [Yes] token=97381098332312635882581309575502310968130699266687541154985482047460855889715
+	qty=         69.444442 wac=0.2800000034 as_of=1758669353 | Nationals vs. Braves [Nationals] token=9738343364152096604876002266456274784195071385838106677166762771787129403257
+	qty=       3021.412811 wac=0.1197266183 as_of=1763892605 | BYU vs. Cincinnati [Cincinnati] token=97388544559026458975827818790429596906404225256569326384665999649124416837022
+	qty=        606.021567 wac=0.3908937258 as_of=1773367157 | Grêmio FBPA vs. Red Bull Bragantino: Both Teams to Score [No] token=97390584101560498889612415647170814400968273225905238440241137771637846659875
+	qty=         28.124446 wac=        0.22 as_of=1763254925 | Maryland Terrapins vs. Illinois [Maryland Terrapins] token=97399420721285930723843493149235093773417081308157893010282388772347434262504
+	qty=       1935.118777 wac=0.1344829781 as_of=1775316475 | Will Real Sociedad de Fútbol vs. Levante UD end in a draw? [Yes] token=97400429583660700200531451777479721052378850708050501455864991101991873421040
+	qty=        392.608694 wac=0.5400000006 as_of=1776036681 | Wizards vs. Cavaliers: O/U 241.5 [Under] token=97402405663295252587333630111986736431582676131215922527283305979403674873776
+	qty=            168.35 wac=0.0524995544 as_of=1780444397 | Kansas City Royals vs. Cincinnati Reds: O/U 12.5 [Over] token=97404589266899141753911753275268311648066501646085875981203352596121934048596
+	qty=          0.000092 wac=0.5191179644 as_of=1770110676 | Will Casa Pia AC win on 2026-02-02? [Yes] token=97435405653150419430789287044521797473572648992978820355234706876602051576330
+	qty=         22.077254 wac=0.6053268484 as_of=1776571250 | Toronto Blue Jays vs. Arizona Diamondbacks [Arizona Diamondbacks] token=97440428031794149193737343607742621444491281635806235084757417778176139949448
+	qty=       3802.611555 wac=0.3302798832 as_of=1778699095 | Stade Brestois 29 vs. RC Strasbourg Alsace: O/U 5.5 [Over] token=97451440190488666033468791730972370422431129319062860080735174985565259221864
+	qty=          771.9180 wac=        0.01 as_of=1776511166 | Spread: CD Universidad de Concepción (-2.5) [CD Universidad de Concepción] token=97455001098515379052522409579999803779211999789680040128574796374742012667232
+	qty=       4419.849622 wac=0.1362014268 as_of=1781395021 | Brazil vs. Morocco: O/U 4.5 [Over] token=97463769959939951376001668326867606901450054749543671073833518320965715043995
+	qty=         24.337433 wac=0.0600000001 as_of=1777754262 | OGC Nice vs. Racing Club de Lens: O/U 4.5 [Over] token=97463985342667410714048961504433429404245612225510304853353640336207043793858
+	qty=        227.905713 wac=0.1408035302 as_of=1768122042 | Blackhawks vs. Predators [Predators] token=97465059432039820964513690559481732487727225006010293743351394530450938779644
+	qty=       7871.628812 wac=0.2040237576 as_of=1762511283 | Clippers vs. Suns [Clippers] token=9746660177285400009527143654835496300121676059369344384089345891647285596688
+	qty=               423 wac=0.5557446808 as_of=1771512212 | Oeiras 2: Anouk Koevermans vs Teodora Kostovic [Koevermans] token=97476057557411344519584591426769639304737669937640236431183208294957601705826
+	qty=            360.08 wac=        0.33 as_of=1765945895 | Avalanche vs. Kraken: O/U 5.5 [Under] token=97481560341090606206658091068165999812782281107700494468433809897208992288962
+	qty=            300.08 wac=       0.215 as_of=1768054390 | Frosinone Calcio vs. US Catanzaro 1929: O/U 1.5 [Under] token=97484183054275418403141562036019254926911868071669052568666217165812907806114
+	qty=            901.28 wac=0.3950051038 as_of=1765649497 | Ducks vs. Devils: O/U 6.5 [Over] token=97485091999106754780444969126496618895330480036325010432242679543942557748628
+	qty=                14 wac=        0.59 as_of=1759573758 | Wuhan Tennis Open, Qualification: Xiyu Wang vs Cristina Bucsa [Bucsa] token=97489327838344179007976840601218229392670958183359514279085115852356086170167
+	qty=        554.770731 wac=0.1101931248 as_of=1776455298 | Yunnan Yukun FC vs. Tianjin Jinmen Hu FC: O/U 4.5 [Over] token=97492075204359905711457082254289329868306893478347544546711511197584916845449
+	qty=         35.493544 wac=0.4364833834 as_of=1777401110 | El Mokawloon El Arab SC vs. Ghazl El Mahalla SC: O/U 1.5 [Over] token=97497467106371659233004096386059442448394253028470845642441511691517337926142
+	qty=          5.000000 wac=        0.62 as_of=1774573299 | Cleveland State Vikings vs. Middle Tennessee Blue Raiders (W) [Cleveland State Vikings] token=97498249155901915765304671420006384111168284297105435731780748651151688260124
+	qty=       1547.203218 wac=0.3351331996 as_of=1779030650 | Genoa CFC vs. AC Milan: O/U 1.5 [Under] token=97501752170173215945940821096999934736865929879508257861211147999854586828377
+	qty=       2523.465104 wac=0.2424090723 as_of=1775667077 | Sarasota: Nishesh Basavareddy vs Hynek Barton [Hynek Barton] token=97503202657548741111503374728437655737970470039460006966068535397966095631698
+	qty=       1210.371292 wac=0.1948627694 as_of=1770084762 | CA Unión vs. CA Gimnasia y Esgrima de Mendoza: Both Teams to Score [Yes] token=97506356196319953363452536617153533946694298933203750640959014673536489359896
+	qty=            0.0001 wac=        0.68 as_of=1782071516 | Spread: Cleveland Guardians (-1.5) [Houston Astros] token=97508001429125225740565741834521181317323106231477634767035725792109510127929
+	qty=            0.0514 wac=        0.97 as_of=1776523938 | Spread: Venezia FC (-1.5) [Venezia FC] token=97511649487121396217690511665638682244954658846758254575296321966688255956652
+	qty=       4060.428758 wac=0.0898402696 as_of=1770067678 | Will Sunderland AFC win on 2026-02-02? [No] token=97512358863753168074946125644845105744624997186516760999978052504621211789743
+	(26364 rows)
+
+	➜ sqlite3 -header -column data/db/pmresearch.db "
+	> SELECT
+	>   COUNT(*) AS holdings_rows,
+	>   COUNT(CASE WHEN CAST(qty AS REAL) > 0 THEN 1 END) AS positive_holdings,
+	>   COUNT(CASE WHEN CAST(qty AS REAL) < 0 THEN 1 END) AS negative_holdings,
+	>   ROUND(SUM(CASE WHEN CAST(qty AS REAL) > 0 THEN CAST(qty AS REAL) ELSE 0 END), 4) AS total_positive_qty,
+	>   ROUND(SUM(CASE WHEN CAST(qty AS REAL) < 0 THEN CAST(qty AS REAL) ELSE 0 END), 4) AS total_negative_qty
+	> FROM holdings
+	> WHERE wallet = '$WALLET';
+	> "
+	holdings_rows  positive_holdings  negative_holdings  total_positive_qty  total_negative_qty
+	-------------  -----------------  -----------------  ------------------  ------------------
+	148130         26271              141                46637690.4334       -153797.689
+
+5- Top holdings con metadata
+
+	➜ sqlite3 -header -column data/db/pmresearch.db "
+	> SELECT
+	>   h.wallet,
+	>   h.token_id,
+	>   ROUND(CAST(h.qty AS REAL), 4) AS qty,
+	>   ROUND(CAST(h.wac_cost AS REAL), 4) AS wac,
+	>   m.question,
+	>   t.outcome_label,
+	>   m.category,
+	>   m.closed,
+	>   m.structure_type
+	> FROM holdings h
+	> LEFT JOIN tokens t ON t.token_id = h.token_id
+	> LEFT JOIN markets m ON m.condition_id = t.condition_id
+	> WHERE h.wallet = '$WALLET'
+	>   AND ABS(CAST(h.qty AS REAL)) > 0.000001
+	> ORDER BY CAST(h.qty AS REAL) DESC
+	> LIMIT 30;
+	> "
+	wallet                                      token_id                                                                        qty          wac     question                                                       outcome_label    category  closed  structure_type
+	------------------------------------------  ------------------------------------------------------------------------------  -----------  ------  -------------------------------------------------------------  ---------------  --------  ------  --------------------
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  33333125574953505042014572663065796133539712143996059145716404099571082268669   168938.5422  0.0075  Will Villarreal CF win on 2026-03-13?                          Yes              Sports    1       negRisk-event-member
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  17545747557459465725997767268175602706752489226455246325014513710736534626768   156842.0512  0.0089  Will SC Freiburg win on 2026-05-10?                            Yes              Sports    1       negRisk-event-member
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  78248766724983621763573737038389694447239642193620905090046937500047661583273   143590.0833  0.4196  Will Portugal vs. DR Congo end in a draw?                      No               Sports    1       negRisk-event-member
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  98580184500079598465467418918769283454631348919041989933733292816016833010109   143005.9901  0.3681  Madrid Open: Aryna Sabalenka vs Hailey Baptiste                Hailey Baptiste  Sports    1       binary
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  108841996491512011644960110386605070587088270415908267253561407680456631957382  133604.1327  0.6507  Madrid Open: Aryna Sabalenka vs Hailey Baptiste                Aryna Sabalenka  Sports    1       binary
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  14510536760629865520632148598972156588664986183855035091641812722969902580648   129348.6497  0.2452  Will Paris Saint-Germain FC win on 2026-04-28?                 No               Sports    1       negRisk-event-member
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  3612393435281522540359979834655761894598376313180591710384535406994913064931    128937.2229  0.2567  Will Spain win on 2026-06-15?                                  Yes              Sports    1       negRisk-event-member
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  36793987766888699593820647443469563387793929831492612627107713011601013977487   94881.1345   0.4272  Will Portugal win on 2026-07-02?                               No               Sports    1       negRisk-event-member
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  44501085937140192345542059821000571137448101289505770294800658635657413740247   94317.1873   0.5264  Madrid Open: Daniil Medvedev vs Flavio Cobolli                 Flavio Cobolli   Sports    1       binary
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  14669509851538031004709822372774640508199726280745386862172619864775504370379   91055.5803   0.6037  Belgium vs. IR Iran: O/U 1.5                                   Over             Sports    1       binary
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  5394387119720374859102823616728155239860117980563720254262894202664026156690    90819.1408   0.0049  Will West Ham United FC win on 2026-05-10?                     Yes              Sports    1       negRisk-event-member
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  59139815692244478083826624316678171619224614485154827080353464594955229712027   90369.6537   0.1527  Portugal vs. Croatia: O/U 3.5                                  Over             Sports    1       binary
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  43562030059636349161701933373869698285910682054313198231414014465304021276051   88762.1586   0.0143  Will Brentford FC win on 2026-01-04?                           No               Sports    1       negRisk-event-member
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  96534169166152854096329454744792001362581823994670367681021101858895578293045   82671.6403   0.3705  Spain vs. Saudi Arabia: O/U 4.5                                Over             Sports    1       binary
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  107928370782866384352393308470448074487232209143841431481520161337861243389626  82023.2166   0.2465  Will Germany vs. Côte d'Ivoire end in a draw?                  Yes              Sports    1       negRisk-event-member
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  9795381952707532508300564260070290176408168146470046587132355104363068409465    80465.8338   0.3241  Will Saudi Arabia vs. Uruguay end in a draw?                   No               Sports    1       negRisk-event-member
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  80759258922821273604856546694647302854082986341054491444252099644262143871328   76983.738    0.0103  Belgium vs. Senegal: O/U 5.5                                   Over             Sports    1       binary
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  25194550776320261115575155543493175860497442089641334394863863159012224930416   76285.1054   0.3165  Will Argentina win on 2026-06-16?                              No               Sports    1       negRisk-event-member
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  12235243188885745556032791162728683404775890684971405412241400544254407441151   75249.4049   0.2892  Belgium vs. IR Iran: O/U 0.5                                   Over             Sports    1       binary
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  69249503865851995566878192672163011025008657340613622580648004881826373141547   72827.5764   0.3377  Will Tottenham Hotspur FC vs. Leeds United FC end in a draw?   No               Sports    1       negRisk-event-member
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  91595611711857061266848005839241280172428276017567711020306849111847225224506   71624.2097   0.1991  Will Brighton & Hove Albion FC win on 2026-03-21?              No               Sports    1       negRisk-event-member
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  68823113928674306141045001617278280860097153360427422526864844120865584898843   71117.2308   0.0015  Will NEC win on 2026-04-12?                                    Yes              Sports    1       negRisk-event-member
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  103593326999189144511980197892152711272542842687141106794103672442345659481047  68486.2335   0.2694  Will Sevilla FC win on 2026-04-11?                             No               Sports    1       negRisk-event-member
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  90354743432236305475508196592143013969221071217938704969309359212626908715363   67814.6746   0.378   Madrid Open: Daniil Medvedev vs Flavio Cobolli                 Daniil Medvedev  Sports    1       binary
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  30241576782565932393823434779581923468462819593380121268077167426441984308430   67025.3105   0.1968  Will FC Bayern München win on 2026-04-07?                      No               Sports    1       negRisk-event-member
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  71071375760168172304176033370950737843497920941132536854173782562929649586357   66938.56     0.0206  Portugal vs. Croatia: O/U 5.5                                  Over             Sports    1       binary
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  72080147492037156388856847886841292533606106562478174064598697076189740313953   66160.2406   0.0329  Will Fulham FC win on 2026-01-04?                              Yes              Sports    1       negRisk-event-member
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  22422134951892189111608908160872892605810890766864062859182294187835028188378   63905.24     0.0502  Sunderland AFC vs. Crystal Palace FC: O/U 4.5                  Over             Sports    1       binary
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  107431008668869596405990203142571171122773516927398185543242899670550752820447  63479.6832   0.1538  Will Stade Brestois 29 vs. Racing Club de Lens end in a draw?  No               Sports    1       negRisk-event-member
+	0x2005d16a84ceefa912d4e380cd32e7ff827875ea  46893558013446474711095682697163147924727125412661923983838699049541094036693   62108.9688   0.1706  Saudi Arabia vs. Uruguay: O/U 2.5                              Over             Sports    1       binary
+
+
+6- Buscar holdings sin metadata
+
+	➜ sqlite3 -header -column data/db/pmresearch.db "
+	> SELECT
+	>   COUNT(*) AS holdings_without_token_metadata
+	> FROM holdings h
+	> LEFT JOIN tokens t ON t.token_id = h.token_id
+	> WHERE h.wallet = '$WALLET'
+	>   AND ABS(CAST(h.qty AS REAL)) > 0.000001
+	>   AND t.token_id IS NULL;
+	> "
+	holdings_without_token_metadata
+	-------------------------------
+	1
+
+7- Data-quality: eventos problemáticos
+
+	➜ sqlite3 -header -column data/db/pmresearch.db "
+	> SELECT
+	>   event_type,
+	>   COUNT(*) AS count
+	> FROM wallet_events
+	> WHERE wallet = '$WALLET'
+	>   AND (
+	>     condition_id IS NULL
+	>     OR (
+	>       event_type = 'TRADE'
+	>       AND token_id IS NULL
+	>     )
+	>   )
+	> GROUP BY event_type
+	> ORDER BY count DESC;
+	> "
+	event_type    count
+	------------  -----
+	REWARD        200
+	MAKER_REBATE  114
+	TAKER_REBATE  30
+	(.venv)  ~\Documents\Programacion\personal\polymarket-research :: main ≡  ?1                          |  polymarket-research | 06:33:03
+	➜ sqlite3 -header -column data/db/pmresearch.db "
+	> SELECT
+	>   id,
+	>   ts,
+	>   event_type,
+	>   condition_id,
+	>   token_id,
+	>   side,
+	>   delta_shares,
+	>   delta_usdc,
+	>   usdc_size,
+	>   tx_hash,
+	>   raw_ref
+	> FROM wallet_events
+	> WHERE wallet = '$WALLET'
+	>   AND event_type = 'CONVERSION';
+	> "
+	id       ts          event_type  condition_id                                                        token_id  side  delta_shares  delta_usdc  usdc_size  tx_hash                                                             raw_ref
+	-------  ----------  ----------  ------------------------------------------------------------------  --------  ----  ------------  ----------  ---------  ------------------------------------------------------------------  -------
+	3402981  1767001445  CONVERSION  0x84287af30216cb38355948330f61733e1aa82abc08a538094aab4dc4b005f300                  0             0           10         0x6ebccda51506730933b60ba505141d584b3cac2604f430f3ceafcb005674f28d  8840
+	(.venv)  ~\Documents\Programacion\personal\polymarket-research :: main ≡  ?1                          |  polymarket-research | 06:33:24
+	➜ sqlite3 -header -column data/db/pmresearch.db "
+	> SELECT
+	>   we.event_type,
+	>   COUNT(*) AS events,
+	>   COUNT(DISTINCT we.condition_id) AS conditions
+	> FROM wallet_events we
+	> LEFT JOIN tokens t ON t.condition_id = we.condition_id
+	> WHERE we.wallet = '$WALLET'
+	>   AND we.event_type IN ('MERGE', 'SPLIT', 'REDEEM')
+	>   AND we.condition_id IS NOT NULL
+	>   AND t.condition_id IS NULL
+	> GROUP BY we.event_type;
+	> "
+	event_type  events  conditions
+	----------  ------  ----------
+	MERGE       117     64
+	REDEEM      201     201
+	(.venv)  ~\Documents\Programacion\personal\polymarket-research :: main ≡  ?1                          |  polymarket-research | 06:33:30
+
+8- Tests
+	======================================================= 64 passed in 20.46s =======================================================
+
+
