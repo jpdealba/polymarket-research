@@ -11,6 +11,7 @@ from ..backup import create_backup, restore_backup
 from ..config import ensure_data_dirs, get_settings
 from ..db.migrations import current_revision, upgrade_to_head
 from ..logging_setup import setup_logging
+from .episodes import episodes_group, replay_episodes
 from .fees import fees_group
 from .ingest import ingest_group, ledger_group
 from .markets import markets_group
@@ -35,6 +36,8 @@ main.add_command(replay_group)
 main.add_command(holdings_group)
 main.add_command(reconcile_group)
 main.add_command(trust_group)
+main.add_command(episodes_group)
+replay_group.add_command(replay_episodes)
 
 
 @main.command()
