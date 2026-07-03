@@ -2,28 +2,60 @@
 
 **Date:** 2026-07-03
 **Wallet:** RN1 (`0x2005d16a84ceefa912d4e380cd32e7ff827875ea`)
-**Status:** Read-only audit — no code changes
+**Status:** Read-only audit — no code changes. All numbers below were computed by
+re-executing the exact `pnl_decomposition.py` algorithm directly against
+`data/db/pmresearch.db` (not estimated) and cross-checked to match the production
+`pnl_decomposition` table total to the penny ($13,030,374.379...). Anywhere a number
+could not be directly computed from the local DB, it is labeled **[unverified]** —
+do not treat those as confirmed.
 
 ---
 
-## 1. Executive Summary
+## 1. Executive summary
 
-Phase 8 PnL decomposition reports **$13,030,374.38** total PnL for RN1. Polymarket UI/leaderboard appears closer to **$10–11M**. The ~$2–3M gap is **not** explained by rewards alone ($292K) and **not** explained by removing all bond_merge ($5.5M). The gap is primarily caused by:
+Phase 8 reports **$13,030,374.38** total realized PnL for RN1. The user's read of
+Polymarket's UI/leaderboard is **~$10–11M**. This audit does **not** find a single
+clean explanation that forces the two numbers together — and per the task
+instructions, it does not try to. Instead, three concrete, quantified, currently-real
+gaps were found:
 
-1. **Phase 8 is realized-only** — it excludes open position unrealized PnL, but Polymarket UI includes it
-2. **WAC vs cash-flow accounting** — our decomposition uses weighted-average-cost realized PnL, while Polymarket uses simple USDC cash flow
-3. **MERGE treatment asymmetry** — our bond_merge_pnl captures WAC-based realized PnL from MERGE, but Polymarket's cash flow treats MERGE as pure USDC inflow (no cost basis subtraction)
+1. **Fees are hard-coded to $0** in `pnl_decomposition.py`, but a fee *estimate*
+   already exists in the DB (`fee_estimates` table, Phase 5 output) that was never
+   wired in: **$1,262,382.99** of worst-case sports taker fees for RN1. Subtracting
+   it brings the total to **$11,767,991.39** — close to, though still slightly above,
+   the 10–11M range.
+2. **$5,639,450.35 of capital is currently parked in 12,450 open (unresolved)
+   positions.** Phase 8 is realized-only: this money is neither a gain nor a loss in
+   the $13.03M figure. If Polymarket's UI marks open inventory to current price
+   (rather than ignoring it, as Phase 8 does), and those positions are on average
+   underwater relative to WAC cost, that would pull the UI number further below
+   $13.03M. This cannot be quantified without Phase 9 marks.
+3. Independently, `redemption_pnl` ($6,752,394.70) is **not** one homogeneous
+   thing — it nets **+$15,055,531.90** of real, cash-backed REDEEM proceeds against
+   **-$8,303,137.20** of non-cash write-offs from derived `REDEEM_PAYOUT` events
+   (losing-side inventory marked to $0 at resolution). Both sides are legitimate
+   realized economics, but this split matters for interpreting where the number
+   comes from (see §4.3).
 
-**Key finding:** There is **no double-counting** between `bond_merge_pnl` and `redemption_pnl`. They capture distinct economic activities. The gap to Polymarket UI is explained by semantic differences in what "PnL" means.
+A fourth finding surfaced during this audit that is **not** part of the UI gap, but
+is a data-quality flag worth raising on its own: **the `episodes` table's
+`realized_pnl` totals ($1.15M flat + $0.85M open + $2.39M resolution ≈ $4.4M) are
+wildly inconsistent with `pnl_decomposition`'s $13.03M**, and `episodes.reward_income`
+sums to exactly $0 wallet-wide even though `REWARD` events clearly exist. See §6.
+
+**On double-counting (the question that motivated this audit):** No, `bond_merge_pnl`
+and `redemption_pnl` do not double-represent the same collateral cycle. Confirmed by
+re-reading and re-executing the code: each token's cost basis lives in a single
+mutable position object per `token_id`, consumed exactly once by whichever event
+closes it (TRADE sell, MERGE, REDEEM, or REDEEM_PAYOUT). There is no code path that
+lets two components draw from the same basis. See §5 for the mechanism-level detail.
 
 ---
 
-## 2. Current Phase 8 PnL Decomposition
+## 2. Current Phase 8 PnL decomposition (verified against production)
 
-### 2.1 RN1 Numbers (all-scope)
-
-| Component | Value | % of Total |
-|-----------|-------|-----------|
+| Component | Value | % of total |
+|-----------|------:|-----------:|
 | `directional_pnl` | $441,323.54 | 3.4% |
 | `bond_merge_pnl` | $5,544,232.17 | 42.5% |
 | `reward_income` | $292,423.97 | 2.2% |
@@ -31,387 +63,289 @@ Phase 8 PnL decomposition reports **$13,030,374.38** total PnL for RN1. Polymark
 | `fees` | $0.00 | 0.0% |
 | **total_pnl** | **$13,030,374.38** | **100%** |
 
-### 2.2 Formula
-
 ```
 total_pnl = directional_pnl + bond_merge_pnl + reward_income + redemption_pnl - fees
 ```
 
-### 2.3 How Each Component Is Computed
+### 2.1 Event-type → component mapping (`pnl_decomposition.py:196-264`)
 
-| Component | Event Types | Method | What It Captures |
-|-----------|------------|--------|-----------------|
-| `directional_pnl` | TRADE (BUY/SELL) | WAC realized PnL per token exit | Profit/loss from selling tokens at different prices than weighted-average cost |
-| `bond_merge_pnl` | MERGE | WAC realized PnL per token removal | Profit/loss from merging complementary pairs back to $1 USDC |
-| `reward_income` | REWARD, MAKER_REBATE, TAKER_REBATE | Raw `delta_usdc` sum | Pure income events (no shares involved) |
-| `redemption_pnl` | REDEEM, REDEEM_PAYOUT | WAC realized PnL per token force-close | Profit/loss from market resolution (winning tokens → $1, losing → $0) |
+| Component | Event types consumed | Method |
+|-----------|----------------------|--------|
+| `directional_pnl` | `TRADE` (SELL leg only) | WAC realized PnL: `proceeds - basis_consumed` via `Position.remove()` |
+| `bond_merge_pnl` | `MERGE` | Same `Position.remove()`, fanned out evenly across the condition's tokens |
+| `reward_income` | `REWARD`, `MAKER_REBATE`, `TAKER_REBATE` | Straight sum of `delta_usdc`, no position/WAC math at all |
+| `redemption_pnl` | `REDEEM` (real, nonzero) + `REDEEM_PAYOUT` (derived) | `Position.close()` — force-closes the *entire* remaining position, not just the redeemed quantity |
+| `fees` | none wired | Hard-coded `0` in every code path |
 
----
+`SPLIT` produces **zero events for RN1** (confirmed by direct query — RN1 never
+splits collateral). It's worth noting for completeness that if it did occur, it
+would only add inventory (`Position.add`), never realize PnL — see §5.2.
 
-## 3. Decomposition by Event Type and Close Reason
+### 2.2 Raw event-type totals for RN1 (`wallet_events`, all-time)
 
-### 3.1 Event Type Roles in PnL
+| event_type | is_derived | count | Σ delta_usdc | Σ delta_shares |
+|---|---|---:|---:|---:|
+| TRADE | 0 | 3,703,043 | -385,130,074.88 | +808,292,121.14 |
+| MERGE | 0 | 55,986 | +158,372,220.22 | -158,372,220.22 |
+| REDEEM | 0 | 80,865 | +236,975,289.06 | -236,975,289.06 |
+| REDEEM_PAYOUT | 1 | 18,632 | +232,870.64 | 0 |
+| REWARD | 0 | 200 | +235,864.68 | 0 |
+| MAKER_REBATE | 0 | 114 | +56,559.29 | 0 |
+| TAKER_REBATE | 0 | 30 | 0 | 0 |
+| CONVERSION | 0 | 1 | 0 | 0 |
 
-| Event Type | Shares Delta | USDC Delta | Token ID | PnL Component | Economic Meaning |
-|------------|-------------|-----------|----------|---------------|-----------------|
-| **TRADE BUY** | +shares | -usdc | token_id | (adds to position) | Capital deployment |
-| **TRADE SELL** | -shares | +usdc | token_id | `directional_pnl` | Exit at market price |
-| **SPLIT** | +shares | -usdc | NULL | (adds to positions) | Capital conversion to token pairs |
-| **MERGE** | -shares | +usdc | NULL | `bond_merge_pnl` | Capital return from pair consolidation |
-| **REDEEM** | -shares | +usdc | NULL | `redemption_pnl` | Resolution payout |
-| **REDEEM_PAYOUT** | 0 | +usdc | NULL | `redemption_pnl` | Derived resolution payout |
-| **REWARD** | 0 | +usdc | NULL | `reward_income` | Participation income |
-| **MAKER_REBATE** | 0 | +usdc | NULL | `reward_income` | Trading rebate income |
-| **TAKER_REBATE** | 0 | +usdc | NULL | `reward_income` | Trading rebate income |
-
-### 3.2 Close Reason Breakdown (Episodes)
-
-| Close Reason | Trigger | PnL Destination | Meaning |
-|-------------|---------|-----------------|---------|
-| `flat` | TRADE crosses zero | `directional_pnl` | Voluntary exit at market price |
-| `resolution` | REDEEM/REDEEM_PAYOUT | `redemption_pnl` | Market resolved, terminal value captured |
-| `open` | Stream end | (not in PnL yet) | Still holding — Phase 9 territory |
-
-### 3.3 Position Lifecycle and PnL Attribution
-
-```
-SPLIT $10 → 10 YES + 10 NO (positions opened, no PnL)
-    ↓
-BUY 5 YES @ $0.40 = $2 (position extended, no PnL)
-    ↓
-SELL 8 YES @ $0.60 = $4.80
-    → directional_pnl = $4.80 - (8 × WAC) = $4.80 - $3.20 = +$1.60
-    ↓
-MERGE 5 YES + 5 NO → $5
-    → bond_merge_pnl = $5 - (5 × WAC_YES + 5 × WAC_NO)
-    ↓
-Market resolves YES wins
-REDEEM 2 YES → $2
-    → redemption_pnl = $2 - (2 × WAC_YES)
-```
+Note MERGE and REDEEM both show `Σ delta_usdc ≈ -Σ delta_shares` almost exactly —
+i.e. RN1's merges and (non-derived) redemptions are overwhelmingly settling at ~$1
+per share, as expected for complementary-pair collateral mechanics.
 
 ---
 
-## 4. MERGE/SPLIT/REDEEM Component Analysis
+## 3. Close reason (episodes projection)
 
-### 4.1 MERGE: Economic Decomposition
+Set in `pmresearch/projections/episodes.py`:
 
-When a MERGE event occurs, the code at `pnl_decomposition.py:222-231`:
+| close_reason | Trigger | Meaning |
+|---|---|---|
+| `flat` | A TRADE or MERGE reduction brings qty to ~0 | Natural exit at market price |
+| `resolution` | REDEEM or REDEEM_PAYOUT | Force-closed regardless of remaining qty because the market resolved |
+| `open` | Still nonzero at end of ledger replay | Not yet realized |
+
+Live counts from the `episodes` table (projection_version=2, includes derived
+REDEEM_PAYOUT events per a direct check of `events_consumed`):
+
+| close_reason | count | Σ realized_pnl | Σ reward_income |
+|---|---:|---:|---:|
+| flat | 25,597 | $1,154,616.27 | $0.00 |
+| open | 12,450 | $847,163.88 | $0.00 |
+| resolution | 120,962 | $2,393,489.60 | $0.00 |
+
+See §6 — these numbers are flagged as unreliable for cross-checking against
+`pnl_decomposition`, not because they're stale, but because they appear to measure
+something structurally different.
+
+---
+
+## 4. MERGE / SPLIT / REDEEM: economic classification
+
+### 4.1 MERGE → `bond_merge_pnl`: **economic profit/loss**, not capital return
 
 ```python
-shares = -_decimal(event.delta_shares)           # positive quantity
-proceeds_per_token = _decimal(event.delta_usdc) / len(tokens)
+shares = -delta_shares
+proceeds_per_token = delta_usdc / len(tokens)
 for token_id in tokens:
-    pnl = position(token_id).remove(shares, proceeds_per_token)
-    add_component("bond_merge_pnl", pnl, ...)
+    pnl = position(token_id).remove(shares, proceeds_per_token)  # proceeds - WAC basis
 ```
 
-**What each MERGE PnL component represents:**
+Since real MERGE proceeds settle almost exactly at $1/share (§2.2), `bond_merge_pnl`
+is capturing the spread between what RN1 paid (via TRADE, not SPLIT — RN1 has no
+SPLIT events) to accumulate a complementary pair, and the $1 it recovers by merging.
+Aggregate: $158.37M merged, releasing ~$152.83M of cost basis, netting +$5.54M — i.e.
+RN1's average acquisition cost across everything it later merged was ~3.5% below
+par. This is **genuine realized trading edge**, not a reclassified capital return —
+a pure SPLIT→MERGE round-trip with no price movement nets to exactly $0 (verified
+against `test_phase8_pnl.py::test_merge_round_trip_decomposes_to_zero`).
 
-| Sub-component | Formula | Economic Meaning |
-|--------------|---------|-----------------|
-| **Capital return** | `shares × WAC_per_token` | Recovery of original cost basis |
-| **Economic profit** | `proceeds - capital_return` | Spread captured from buying tokens below $1 and merging at $1 |
-| **Basis release** | `cost_before - capital_return` | Reduction in position cost basis (if partial merge) |
+### 4.2 SPLIT: no PnL event, ever
 
-**Example:** Buy 10 YES @ $0.45 + 10 NO @ $0.50 = $9.50 total. MERGE → $10.00.
-- `bond_merge_pnl` = $10.00 - $9.50 = **+$0.50** (arbitrage spread)
-- This is **economic profit**, not capital return
+Not exercised by RN1, but for completeness: SPLIT only distributes cost basis across
+the condition's tokens (`Position.add`), it never touches a PnL bucket. Any profit or
+loss on split-derived inventory shows up later, whichever way it's eventually closed.
 
-### 4.2 SPLIT: No Direct PnL
+### 4.3 REDEEM / REDEEM_PAYOUT → `redemption_pnl`: two economically distinct halves
 
-SPLIT (`pnl_decomposition.py:213-220`) only adds positions:
-```python
-cost_per_token = -_decimal(event.delta_usdc) / len(tokens)
-for token_id in tokens:
-    position(token_id).add(_decimal(event.delta_shares), cost_per_token)
-```
+Re-running the algorithm with the two paths tracked separately:
 
-**SPLIT never produces PnL** — it only distributes cost basis across tokens. The PnL impact comes later when those tokens are sold (directional), merged (bond_merge), or redeemed (redemption).
+| Sub-path | Trigger | Σ proceeds | Σ realized pnl |
+|---|---|---:|---:|
+| Real REDEEM (nonzero `delta_usdc`, actual cash) | API-reported cash redemption | $233,692,969.71 | **+$15,055,531.90** |
+| Derived REDEEM_PAYOUT (non-cash) | Zero-value API REDEEM rows, backfilled from `qty × resolution_price` | $162,313.29 (recomputed at replay time*) | **-$8,303,137.20** |
+| **Total `redemption_pnl`** | | | **$6,752,394.70** |
 
-### 4.3 REDEEM/REDEEM_PAYOUT: Economic Decomposition
+\* The stored `delta_usdc` on `REDEEM_PAYOUT` rows sums to $232,870.64, computed at
+derivation time; recomputing `qty × resolution_price` at replay order gives
+$162,313.29. The two don't need to match — `pnl_decomposition.py` never reads the
+stored `delta_usdc` for `REDEEM_PAYOUT`, it always recomputes proceeds live
+(`pnl_decomposition.py:251-261`) — but the fact that they differ at all confirms the
+stored value is informational only, not authoritative.
 
-**Path A — REDEEM with nonzero delta_usdc** (`pnl_decomposition.py:233-249`):
-```python
-proceeds_per_token = _decimal(event.delta_usdc) / len(tokens)
-for token_id in tokens:
-    pnl = pos.close(proceeds_per_token)
-    add_component("redemption_pnl", pnl, ...)
-```
+**What this means economically:**
+- The **+$15.06M** real-REDEEM side is capital return plus economic profit on
+  winning positions that actually paid out in USDC — unambiguous realized profit.
+- The **-$8.30M** derived side is **not a cash event at all**. It's Phase 8 correctly
+  recognizing that inventory sitting in losing-side tokens (often accumulated via
+  ordinary TRADE activity across many small sports markets, per the `Sports:
+  $12,744,824.08` category share) is now worthless, and writing off its cost basis
+  as a realized loss — even though the source API never recorded any cash movement
+  for it. This is real economic loss recognition that the API-only, cash-flow view
+  would simply never surface (the "complete, honest PnL" goal stated in
+  `docs/plan/IMPLEMENTATION_PLAN.md`'s Phase 8 section).
 
-**Path B — REDEEM_PAYOUT (derived)** (`pnl_decomposition.py:251-261`):
-```python
-proceeds = pos.qty * prices.get(token_id, _ZERO)  # resolution price
-pnl = pos.close(proceeds)
-add_component("redemption_pnl", pnl, ...)
-```
-
-**What each REDEEM PnL component represents:**
-
-| Sub-component | Formula | Economic Meaning |
-|--------------|---------|-----------------|
-| **Terminal value** | `qty × resolution_price` | What the winning tokens are worth |
-| **Capital return** | `min(terminal_value, cost_basis)` | Recovery of original investment |
-| **Economic profit/loss** | `terminal_value - cost_basis` | Final payoff minus cost |
-| **Basis release** | `cost_basis` (always returned to zero) | Position closed, cost cleared |
-
-**Key insight:** REDEEM_PAYOUT uses `resolution_price` from the `markets` table. For binary markets, winning token = $1.00, losing = $0.00. This means:
-- Holding 100 winning tokens: proceeds = $100, PnL = $100 - cost_basis
-- Holding 100 losing tokens: proceeds = $0, PnL = $0 - cost_basis = **loss**
+This split is the strongest evidence that RN1's real strategy involves holding both
+sides of a large number of sports markets and letting most losing legs expire
+worthless while a smaller number of winners (plus the merge spread) carry the book.
 
 ---
 
-## 5. Double-Counting Analysis: bond_merge_pnl vs redemption_pnl
+## 5. Double-counting check: `bond_merge_pnl` vs `redemption_pnl`
 
-### 5.1 Hypothesis Check
+**Conclusion: no double-counting.** Verified two ways.
 
-**Question:** Could the same collateral cycle be partially represented in both `bond_merge_pnl` and `redemption_pnl`?
+**By construction:** both components draw from the same `dict[token_id, Position]`,
+a single mutable object per token for the wallet's *entire* history (not
+re-instantiated per episode). `MERGE` calls `.remove()`, `REDEEM`/`REDEEM_PAYOUT`
+call `.close()`. Both mutate `qty`/`cost` in place and return the realized delta for
+exactly the shares consumed in that call. Once shares are removed by one event, they
+are gone — a later event physically cannot re-consume the same basis, because
+there's no remaining `qty`/`cost` left for it to act on.
 
-**Answer: No.** The two buckets are mutually exclusive by construction:
+**By example (partial merge then resolution):**
+1. SPLIT $10 → 10 YES + 10 NO (not RN1's pattern, but illustrative)
+2. MERGE 5 YES + 5 NO → $5: `bond_merge_pnl` realizes PnL on exactly those 5+5 shares
+3. Market resolves; REDEEM the remaining 5 YES → $5: `redemption_pnl` realizes PnL on
+   the other 5 shares only
 
-| Property | `bond_merge_pnl` | `redemption_pnl` |
-|----------|-----------------|-----------------|
-| Trigger event | MERGE | REDEEM / REDEEM_PAYOUT |
-| Position effect | `remove()` (partial/full) | `close()` (force-close) |
-| When it happens | Before resolution | At/after resolution |
-| Tokens involved | Complementary pairs (both sides) | Winning tokens only (or all at $0/$1) |
-| Cost basis | Proportional removal | Full close |
+No overlap — the two events act on disjoint quantities of the same token.
 
-### 5.2 Proof: MERGE Round-Trip Test
-
-From `test_phase8_pnl.py:187-204`:
-```python
-def test_merge_round_trip_decomposes_to_zero(session):
-    # SPLIT $10 → 10 tokens each side
-    # MERGE 10 tokens each side → $10
-    # Net PnL should be 0
-    assert stats.total_pnl == Decimal("0")
-    assert row.bond_merge_pnl == Decimal("0")
-```
-
-A SPLIT→MERGE round-trip produces zero PnL. TheMERGE captures the full cost basis recovery plus any spread. If the same tokens were later REDEEMed, the MERGE would have already closed those positions — there's nothing left to REDEEM.
-
-### 5.3 Edge Case: Partial MERGE Then REDEEM
-
-Consider:
-1. SPLIT $10 → 10 YES + 10 NO
-2. MERGE 5 YES + 5 NO → $5 (partial merge)
-   - `bond_merge_pnl` captures PnL on 5 tokens
-3. Market resolves, REDEEM remaining 5 YES → $5
-   - `redemption_pnl` captures PnL on remaining 5 tokens
-
-**No overlap.** The MERGE closed 5 tokens' positions; the REDEEM closed the other 5. Each bucket handles distinct tokens.
-
-### 5.4 Conclusion
-
-**No double-counting exists.** The two components are structurally disjoint. The $5.5M `bond_merge_pnl` and $6.75M `redemption_pnl` represent genuinely different economic activities:
-- `bond_merge_pnl`: profit from merging complementary pairs (arbitrage/market-making spread)
-- `redemption_pnl`: profit from holding winning positions to resolution
+**One caveat found, immaterial to the total:** for a real (non-derived) `REDEEM`
+event, `pnl_decomposition.py:239-249` splits `delta_usdc` **evenly across every
+token in the condition**, including losing-side tokens that in reality receive $0.
+This means a losing token can be force-closed with a nonzero `proceeds_per_token`
+that rightfully belonged to the winner. This does **not** change the grand total
+(the sum across a condition's tokens is invariant to how the split is done — it's
+always `Σproceeds - Σcost_before` either way), but it does **mis-attribute** PnL
+between two tokens of the same condition. Since category is assigned at the
+condition level, `by-category` totals are unaffected too. This is a real but narrow
+bug worth fixing before any *per-token* or *per-market* Phase 8 breakdown is trusted.
 
 ---
 
-## 6. Alternative PnL Definitions
+## 6. A second finding: `episodes` and `pnl_decomposition` disagree by ~$8.6M
 
-### 6.1 All-In Accounting PnL
+This was not asked for directly, but surfaced while validating against the episodes
+projection and is material enough to flag. `episodes.realized_pnl` summed across all
+`close_reason` values is **~$4.4M**, vs. `pnl_decomposition`'s **$13.03M** — a ~$8.6M
+gap between two projections in the same codebase that both claim to compute
+"realized PnL" from the same ledger.
 
-```
-all_in_accounting_pnl = directional_pnl + bond_merge_pnl + reward_income + redemption_pnl - fees
-```
+Two concrete, verified contributing factors:
 
-**Value:** $13,030,374.38
-**Meaning:** Total realized PnL from all sources. This is the current Phase 8 `total_pnl`.
-**Gap to Polymarket UI:** ~$2–3M (explained below)
+1. **`episodes.reward_income` sums to exactly $0** wallet-wide. `REWARD` /
+   `MAKER_REBATE` / `TAKER_REBATE` events have `token_id = NULL` at the ledger level
+   (per `ledger/model.py`'s documented convention — these are unscoped to any
+   market). `episodes.py` attributes reward income to "the currently open episode
+   for that token" — but a `NULL`-token event can never match a per-token episode,
+   so it's silently dropped. `pnl_decomposition.py` instead sums `REWARD`/rebate
+   `delta_usdc` directly with no token/episode requirement, which is why it captures
+   the full $292,423.97. This accounts for a small, known slice of the $8.6M gap,
+   not the bulk of it.
+2. **Ruled out:** a hypothesis that 14 tokens with negative ending quantity
+   (pre-existing, documented "upstream historical gap" tokens like SDSU/Grand
+   Canyon) might be leaking unbounded profit in `pnl_decomposition.py`'s
+   `Position.remove()` (its `qty_before <= 0` branch returns the full sale proceeds
+   as pnl without touching cost basis, and never re-closes/resets). Checked directly:
+   total TRADE volume across those 14 tokens is only $95,130.84 net — far too small
+   to explain the gap. Not the cause.
 
-### 6.2 Trading PnL Ex-Rewards
-
-```
-trading_pnl_ex_rewards = directional_pnl + bond_merge_pnl + redemption_pnl - fees
-```
-
-**Value:** $13,030,374.38 - $292,423.97 = **$12,737,950.41**
-**Meaning:** Pure trading PnL without reward/rebate income. Useful for strategy analysis.
-**Gap to Polymarket UI:** ~$1.7–2.7M
-
-### 6.3 UI-Style Candidate PnL
-
-Polymarket's leaderboard PnL formula (validated by multiple sources):
-
-```
-ui_style_candidate_pnl = SUM(delta_usdc where delta_usdc > 0)
-                       - SUM(|delta_usdc| where delta_usdc < 0)
-                       + open_position_market_value
-```
-
-Or equivalently:
-
-```
-ui_style_candidate_pnl = net_usdc_cash_flow + unrealized_position_value
-```
-
-Where:
-- `net_usdc_cash_flow` = SUM(all positive delta_usdc) - SUM(all negative delta_usdc)
-- `unrealized_position_value` = SUM(qty × current_price) for open positions (Phase 9)
-
-**Our Phase 8 computes:** `all_in_accounting_pnl` (realized only, WAC-based)
-**Polymarket UI computes:** `net_usdc_cash_flow + unrealized_position_value`
-
-**The gap sources:**
-
-| Source | Direction | Magnitude | Explanation |
-|--------|-----------|-----------|-------------|
-| Unrealized PnL (open positions) | ± | Unknown (Phase 9) | Polymarket includes open position value; we don't yet |
-| WAC vs cash-flow on MERGE | +$ | ~$1–2M estimated | Our `bond_merge_pnl` = proceeds - WAC_cost; Polymarket MERGE = raw proceeds (no cost subtraction) |
-| WAC vs cash-flow on REDEEM | -$ | ~$1–2M estimated | Our `redemption_pnl` = terminal_value - WAC_cost; Polymarket REDEEM = raw proceeds |
-| SPLIT treatment | ± | ~$0–1M | Polymarket subtracts SPLIT outflow; our SPLIT only affects positions, not PnL directly |
-
-### 6.4 Realized-Only Closed PnL
-
-```
-realized_only_closed_pnl = SUM(episode.realized_pnl WHERE close_reason IN ('flat', 'resolution'))
-                         + reward_income
-```
-
-**Value:** Should equal `all_in_accounting_pnl` minus open episode PnL (which is zero in Phase 8 since open episodes have no realized PnL).
-**Meaning:** PnL from fully closed positions only. Excludes open positions.
-**Gap to Polymarket UI:** Same as 6.3 (no open position value)
-
-### 6.5 Realized Plus Open Value Candidate
-
-```
-realized_plus_open_value = realized_only_closed_pnl + open_position_market_value
-```
-
-**Value:** $13,030,374.38 + Phase_9_open_value
-**Meaning:** Most comparable to Polymarket UI PnL. Requires Phase 9 marks.
-**Gap to Polymarket UI:** Should be close if Phase 9 marks are accurate.
+The remaining ~$8M+ is unexplained by this audit and looks like a genuine
+methodological divergence between the two projections (e.g., `episodes.py`'s
+flat-to-flat episode boundaries vs. `pnl_decomposition.py`'s single continuous
+per-token position object may not, in fact, behave identically once REDEEM's
+even-split-across-tokens quirk (§5) and MERGE/REDEEM ordering interact across
+120,962 resolution-closed episodes — this needs its own dedicated investigation, not
+folded into the UI-comparison question this audit was scoped to answer. **Recommend
+treating `pnl_decomposition` as the authoritative Phase 8 number** (it's the one
+`RN1_CHECKPOINT.md` and the CLI (`pmr pnl show`) actually surface), and opening a
+separate audit specifically reconciling `episodes.py` against it before relying on
+episode-level realized PnL for anything.
 
 ---
 
-## 7. Gap Analysis: Phase 8 vs Polymarket UI
+## 7. Alternative PnL definitions
 
-### 7.1 The Core Semantic Difference
+| Definition | Formula | Value | Status |
+|---|---|---:|---|
+| `all_in_accounting_pnl` | current Phase 8 `total_pnl` | **$13,030,374.38** | Verified (= production) |
+| `trading_pnl_ex_rewards` | `total_pnl - reward_income` | **$12,737,950.41** | Verified |
+| `fee_adjusted_pnl` | `total_pnl -` worst-case estimated fees | **$11,767,991.39** | Verified subtraction; fee estimate itself is a worst-case/taker-only model, see §7.1 |
+| `fee_adjusted_ex_rewards` | `trading_pnl_ex_rewards -` worst-case fees | **$11,475,567.42** | Same caveat |
+| `ui_style_candidate_pnl` | raw net cash flow, Σ`delta_usdc` across every event type, no WAC at all | **$10,742,729.01** | Verified computation; **not verified as Polymarket's actual method** — see §7.2 |
+| `realized_only_closed_pnl` | Σ`episodes.realized_pnl` where `close_reason IN ('flat','resolution')` | **$3,548,105.87** | Verified from DB, but **not recommended** — see §6, this projection appears to disagree structurally with `pnl_decomposition` |
+| `realized_plus_open_value_candidate` | `total_pnl` + mark-to-market delta on open positions | **not computable** | Needs Phase 9 marks; open cost basis is $5,639,450.35 (see §7.3), but current market value of that inventory is unknown |
 
-| Aspect | Phase 8 | Polymarket UI |
-|--------|---------|---------------|
-| **Scope** | Realized only | Realized + Unrealized |
-| **Method** | WAC (weighted average cost) | Cash flow (net USDC in/out) |
-| **MERGE** | `proceeds - WAC_cost` (profit) | Raw `+proceeds` (inflow) |
-| **REDEEM** | `terminal_value - WAC_cost` (profit) | Raw `+proceeds` (inflow) |
-| **SPLIT** | No direct PnL (position only) | Raw `-cost` (outflow) |
-| **Fees** | $0 (not implemented) | Included if available |
+### 7.1 Fees: a real, already-quantified gap that Phase 8 ignores
 
-### 7.2 Why Our Number Is Higher
+`fee_estimates` (Phase 5 output, 3,699,456 rows for RN1) already contains an
+estimate that `pnl_decomposition.py` never reads:
 
-The Phase 8 number ($13.03M) is **higher** than Polymarket UI (~$10–11M) despite excluding unrealized PnL. This seems counterintuitive. The explanation:
+| category | rows | Σ estimated_fee | Σ worst_case_fee | Σ actual_fee |
+|---|---:|---:|---:|---:|
+| sports | 3,695,514 | $1,262,382.99 | $1,262,382.99 | $0.00 (never populated) |
+| unclassified | 3,942 | $0.00 | $0.00 | $0.00 |
 
-**WAC-based MERGE/REDEEM PnL includes cost basis recovery as "profit".**
+The active fee schedule (`fee_schedules` table): `polymarket_sports_taker_fee_v1`,
+effective 2026-03-30, `fee = shares × price × 0.03 × (price×(1-price))^1`. Since
+`estimated_fee == worst_case_fee` for every row and `actual_fee` is never populated,
+this is a **taker-only upper bound** — Phase 11 (maker/taker fill enrichment,
+per `CLAUDE.md`'s roadmap) hasn't run, so any maker fills RN1 actually got (which pay
+$0 taker fee, and separately already show up as `MAKER_REBATE` income in
+`reward_income`) are being over-charged here. True fees are somewhere between $0 and
+$1,262,382.99, most likely meaningfully below the ceiling given RN1's `Sports`
+category dominates volume and market-making-style behavior (large merge/redemption
+share of PnL) usually implies a non-trivial maker fraction.
 
-Consider a concrete example:
-1. BUY 100 YES @ $0.45 = $45 outflow
-2. BUY 100 NO @ $0.50 = $50 outflow
-3. MERGE 100+100 → $100 inflow
-4. Market resolves, REDEEM winning tokens → $100 inflow
+### 7.2 `ui_style_candidate_pnl`: closest empirical match, but not a confirmed method
 
-**Our Phase 8:**
-- MERGE: `bond_merge_pnl` = $100 - (100×$0.45 + 100×$0.50) = $100 - $95 = +$5
-- REDEEM: `redemption_pnl` = $100 - (remaining cost basis)
-- Total realized: depends on cost basis allocation
+This is literally `Σ delta_usdc` across every wallet_events row, with no cost-basis
+matching at all — money in minus money out, full stop. At $10,742,729.01 it's the
+number closest to the user's stated 10-11M read of the UI. **This proximity should
+be treated as a data point, not confirmation** — this audit has no independent
+verification of how Polymarket's UI actually computes its displayed PnL, and this
+candidate has a specific, known blind spot: it doesn't distinguish "loss on a
+position that's still open" from "loss on a position that's now worthless" — it just
+reflects whatever cash has crossed the wallet boundary so far, which structurally
+undercounts if RN1's still-open $5.64M of inventory eventually resolves as
+profitable (the profit hasn't crossed the wallet boundary yet), and doesn't credit
+the realized-but-non-cash losses recognized in §4.3 at all, since no cash moved for
+those. Do not present this number as "the" answer without independently confirming
+Polymarket's own PnL methodology.
 
-**Polymarket cash flow:**
-- BUY: -$45 - $50 = -$95
-- MERGE: +$100
-- REDEEM: +$100
-- Net cash flow: +$105
-- Plus open position value: $0 (all closed)
+### 7.3 Open capital: real, but not yet a gain or loss
 
-**The difference:** Polymarket treats MERGE and REDEEM as pure inflows. Our WAC method subtracts cost basis, which can produce different numbers depending on how cost is allocated across tokens.
-
-### 7.3 The Actual Gap Decomposition
-
-For RN1, the estimated gap sources:
-
-```
-Phase 8 total_pnl:                          $13,030,374.38
-Polymarket UI (estimated):                  ~$10,500,000.00
-Gap:                                        ~$2,530,374.38
-
-Gap decomposition (estimated):
-  WAC vs cash-flow on MERGE/REDEEM:         ~$2,000,000 (main driver)
-  Unrealized PnL (open positions):          ~$500,000 (unknown direction)
-  Fee differences:                          $0 (fees not implemented)
-  SPLIT treatment:                          ~$30,000 (small)
-```
-
-### 7.4 Why Rewards Don't Explain the Gap
-
-- `reward_income` = $292,423.97
-- Gap = ~$2,530,374.38
-- Rewards explain only ~12% of the gap
-
-The gap is primarily driven by **accounting method differences** (WAC vs cash flow), not by reward income.
+12,450 tokens hold nonzero quantity at the end of the ledger replay (matches Phase 6's
+"open episodes: 12,450 = nonzero holdings: 12,450" reconciliation exactly). Total
+cost basis parked in these open positions: **$5,639,450.35**. This is money RN1 has
+spent that hasn't come back yet — not a loss, not a profit, just unresolved capital.
+Phase 8 correctly excludes it from `total_pnl` (it's realized-only by design). If
+Polymarket's UI marks open inventory at current price rather than ignoring it
+entirely, the UI number would differ from Phase 8's by exactly
+`current_market_value(open) - $5,639,450.35`, which could go either direction and
+requires Phase 9 marks to determine.
 
 ---
 
-## 8. Recommendations
-
-### 8.1 For Comparison to Polymarket UI
-
-To produce a number comparable to Polymarket UI:
-
-```python
-# Cash-flow PnL (no WAC, no cost basis)
-cash_flow_pnl = (
-    SUM(delta_usdc for all events where delta_usdc > 0)  # inflows
-    - SUM(|delta_usdc| for all events where delta_usdc < 0)  # outflows
-)
-
-# Add unrealized position value (Phase 9)
-ui_style_pnl = cash_flow_pnl + open_position_market_value
-```
-
-This would require a separate projection (or a flag on `rebuild_pnl_decomposition`) that computes raw cash flow without WAC attribution.
-
-### 8.2 For Strategy Analysis
-
-The current Phase 8 decomposition is **more informative** than Polymarket UI for strategy analysis because it separates:
-- Directional trading skill (`directional_pnl`)
-- Arbitrage/market-making spread (`bond_merge_pnl`)
-- Resolution capture (`redemption_pnl`)
-- Passive income (`reward_income`)
-
-Polymarket UI lumps all of these into one number, making it impossible to distinguish a directional bettor from a market maker.
-
-### 8.3 For Reconciliation
-
-The reconciliation check in Phase 7 compares against `/positions.realizedPnl`. This field uses Polymarket's internal accounting, which may differ from both our WAC method and the cash-flow method. Remaining discrepancies are expected until:
-1. Phase 9 adds unrealized PnL
-2. Fee enrichment is complete
-3. A cash-flow PnL variant is implemented for direct comparison
-
----
-
-## 9. Conclusion
+## 8. Conclusion
 
 | Question | Answer |
-|----------|--------|
-| Is there double-counting between `bond_merge_pnl` and `redemption_pnl`? | **No.** They are structurally disjoint. |
-| Why is Phase 8 higher than Polymarket UI? | **WAC vs cash-flow accounting.** Our method subtracts cost basis from MERGE/REDEEM proceeds; Polymarket treats them as raw inflows. |
-| Do rewards explain the gap? | **No.** Rewards are $292K; gap is ~$2.5M. |
-| Which definition matches Polymarket UI? | **Cash-flow PnL + unrealized position value** (not yet implemented). |
-| Is the current Phase 8 decomposition wrong? | **No.** It's a different, more informative decomposition. The numbers are internally consistent. |
-| What should we do? | Implement a `cash_flow_pnl` variant for UI comparison; keep the WAC decomposition for strategy analysis. |
+|---|---|
+| Double-counting between `bond_merge_pnl` and `redemption_pnl`? | **No** — verified by code path (disjoint mutations of a single per-token position) and by example. One narrow, total-preserving mis-attribution bug exists in REDEEM's even token split (§5). |
+| Is the $13.03M forced or fabricated? | No — it's a faithful WAC-based realized PnL, reproduced independently against the raw ledger and matching production exactly. |
+| What explains most of the gap to the ~10-11M UI read? | Two concrete, quantified, currently-missing pieces: (1) $1.26M of worst-case sports fees that exist in the DB but aren't wired into Phase 8 (§7.1), and (2) $5.64M of capital in currently-open positions whose mark-to-market value under Polymarket's method is unknown without Phase 9 (§7.3). Applying just the fee estimate lands at $11.77M — still above the stated range, meaning open-position marking is likely also contributing, but its sign and size can't be determined here. |
+| Does rewards income explain the gap? | No — $292,423.97 is ~12% of a ~$2.5M gap at most. |
+| Should the $13.03M number be changed? | Not without doing the actual work: wire real fee attribution (Phase 11 maker/taker enrichment first, so fees aren't overstated), then add Phase 9 marks for open positions. Do not force-fit a "cash flow" reinterpretation (§7.2) without independently confirming that's genuinely how Polymarket computes its displayed number. |
+| Anything else worth fixing first? | Yes — `episodes.py` and `pnl_decomposition.py` disagree by ~$8.6M on "realized PnL" from the same ledger (§6). This is independent of the UI-comparison question but should be reconciled before episode-level PnL is used for anything downstream (e.g. strategy detectors in Phase 13/14). |
 
 ---
 
-## 10. Files Referenced
+## 9. Files referenced
 
-| File | Lines | Content |
-|------|-------|---------|
-| `pmresearch/projections/pnl_decomposition.py` | 1-340 | Core PnL decomposition logic |
-| `pmresearch/projections/episodes.py` | 1-475 | Episode projection with WAC |
-| `pmresearch/ingest/derived.py` | 1-176 | Derived REDEEM_PAYOUT events |
-| `pmresearch/ledger/model.py` | 1-108 | Event type conventions |
-| `tests/test_phase8_pnl.py` | 1-273 | Phase 8 tests |
-| `docs/evidence/RN1_CHECKPOINT.md` | 1-214 | RN1 research checkpoint |
-| `docs/plan/IMPLEMENTATION_PLAN.md` | 383-403 | Phase 8 scope definition |
-| `docs/PHASE8_ACCEPTANCE.md` | 1-16 | Acceptance criteria |
+| File | Content |
+|---|---|
+| `pmresearch/projections/pnl_decomposition.py` | Core Phase 8 PnL decomposition logic (re-executed directly against the DB for this audit) |
+| `pmresearch/projections/episodes.py` | Episode projection with WAC, `close_reason` assignment |
+| `pmresearch/ingest/derived.py` | Derived `REDEEM_PAYOUT` event construction |
+| `pmresearch/ledger/model.py` | Event type sign conventions, `token_id = NULL` documentation for MERGE/SPLIT/REDEEM/REWARD |
+| `pmresearch/fees/schedules.py` (schema: `fee_schedules` table) | Sports taker fee schedule, effective 2026-03-30, 3% with curvature |
+| `data/db/pmresearch.db` — `fee_estimates` table | Existing but unused $1.26M worst-case sports fee estimate for RN1 |
+| `tests/test_phase8_pnl.py` | Golden tests, incl. `test_merge_round_trip_decomposes_to_zero` cited in §4.1 |
+| `docs/evidence/RN1_CHECKPOINT.md` | RN1 research checkpoint, source of the headline numbers audited here |
+| `docs/plan/IMPLEMENTATION_PLAN.md` (Phase 8 section) | Stated goal: "complete, honest PnL — including cash flows the API reports as zero" |
