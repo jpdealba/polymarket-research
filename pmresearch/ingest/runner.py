@@ -69,6 +69,36 @@ def _event_params(event: WalletEvent, ingested_at: str) -> dict:
     }
 
 
+def _parse_rows(rows: list[dict], raw_fetch_id: int) -> tuple[list[WalletEvent], bool]:
+    seen: dict[str, int] = {}
+    events: list[WalletEvent] = []
+    has_duplicate_rows = False
+    for row in rows:
+        row_wallet = (row.get("proxyWallet") or "").lower()
+        event = parse_activity_row(row, wallet=row_wallet, raw_fetch_id=raw_fetch_id)
+        duplicate_index = seen.get(event.dedupe_key, 0)
+        seen[event.dedupe_key] = duplicate_index + 1
+        if duplicate_index:
+            has_duplicate_rows = True
+            event = parse_activity_row(
+                row,
+                wallet=row_wallet,
+                raw_fetch_id=raw_fetch_id,
+                duplicate_index=duplicate_index,
+            )
+        events.append(event)
+    return events, has_duplicate_rows
+
+
+def _insert_events(session: Session, events: list[WalletEvent], ingested_at: str) -> int:
+    inserted = 0
+    for event in events:
+        result = session.execute(_INSERT_SQL, _event_params(event, ingested_at))
+        if result.rowcount:
+            inserted += 1
+    return inserted
+
+
 def run_ingest(session: Session, *, wallet: Optional[str] = None) -> IngestStats:
     query = (
         "SELECT id, file_path FROM raw_fetches "
@@ -81,6 +111,7 @@ def run_ingest(session: Session, *, wallet: Optional[str] = None) -> IngestStats
     query += " ORDER BY id"
 
     raw_fetches = session.execute(text(query), params).fetchall()
+    raw_fetch_ids_processed = {raw_fetch.id for raw_fetch in raw_fetches}
 
     events_seen = 0
     events_inserted = 0
@@ -88,14 +119,9 @@ def run_ingest(session: Session, *, wallet: Optional[str] = None) -> IngestStats
 
     for raw_fetch in raw_fetches:
         rows = _load_payload(raw_fetch.file_path)
-        raw_events_inserted = 0
-        for row in rows:
-            row_wallet = (row.get("proxyWallet") or "").lower()
-            event = parse_activity_row(row, wallet=row_wallet, raw_fetch_id=raw_fetch.id)
-            events_seen += 1
-            result = session.execute(_INSERT_SQL, _event_params(event, now))
-            if result.rowcount:
-                raw_events_inserted += 1
+        events, _ = _parse_rows(rows, raw_fetch.id)
+        events_seen += len(events)
+        raw_events_inserted = _insert_events(session, events, now)
         session.execute(
             text("UPDATE raw_fetches SET ingested_at = :t WHERE id = :id"),
             {"t": now, "id": raw_fetch.id},
@@ -103,8 +129,32 @@ def run_ingest(session: Session, *, wallet: Optional[str] = None) -> IngestStats
         session.commit()
         events_inserted += raw_events_inserted
 
+    duplicate_repair_fetches = 0
+    if wallet is not None:
+        repair_rows = session.execute(
+            text(
+                "SELECT id, file_path FROM raw_fetches "
+                "WHERE source = 'dataapi' AND endpoint = 'activity' "
+                "AND ingested_at IS NOT NULL "
+                "AND json_extract(params_json, '$.user') = :wallet "
+                "ORDER BY id"
+            ),
+            {"wallet": wallet.lower()},
+        ).fetchall()
+        for raw_fetch in repair_rows:
+            if raw_fetch.id in raw_fetch_ids_processed:
+                continue
+            rows = _load_payload(raw_fetch.file_path)
+            events, has_duplicate_rows = _parse_rows(rows, raw_fetch.id)
+            if not has_duplicate_rows:
+                continue
+            duplicate_repair_fetches += 1
+            events_seen += len(events)
+            events_inserted += _insert_events(session, events, now)
+            session.commit()
+
     return IngestStats(
-        raw_fetches_processed=len(raw_fetches),
+        raw_fetches_processed=len(raw_fetches) + duplicate_repair_fetches,
         events_seen=events_seen,
         events_inserted=events_inserted,
     )

@@ -248,6 +248,92 @@ def test_multiple_legitimate_fills_in_same_transaction_are_preserved(settings, s
     assert {Decimal(row.delta_usdc) for row in rows} == {Decimal("-4.0"), Decimal("-6.0")}
 
 
+def test_byte_identical_duplicate_fills_in_same_payload_are_preserved(settings, session):
+    raw_store = RawStore(settings, session)
+    fill = {
+        **GOLDEN_ROWS[0],
+        "transactionHash": "0xduplicate-fill",
+        "size": 3333.95,
+        "usdcSize": 1300.2405,
+        "price": 0.39,
+    }
+    _seed(raw_store, GOLDEN_WALLET, [fill, dict(fill)])
+
+    stats = run_ingest(session, wallet=GOLDEN_WALLET)
+
+    assert stats.events_seen == 2
+    assert stats.events_inserted == 2
+    rows = session.execute(
+        text(
+            "SELECT tx_hash, token_id, delta_shares, dedupe_key "
+            "FROM wallet_events WHERE wallet = :w ORDER BY id"
+        ),
+        {"w": GOLDEN_WALLET},
+    ).fetchall()
+    assert len(rows) == 2
+    assert rows[0].tx_hash == rows[1].tx_hash == "0xduplicate-fill"
+    assert rows[0].dedupe_key != rows[1].dedupe_key
+
+    rerun = run_ingest(session, wallet=GOLDEN_WALLET)
+    assert rerun.events_inserted == 0
+
+
+def test_ingest_run_repairs_duplicate_rows_in_already_ingested_raw_fetch(settings, session):
+    raw_store = RawStore(settings, session)
+    fill = {
+        **GOLDEN_ROWS[0],
+        "transactionHash": "0xhistorical-duplicate",
+        "size": 3333.95,
+        "usdcSize": 1266.901,
+        "price": 0.38,
+    }
+    raw = _seed(raw_store, GOLDEN_WALLET, [fill, dict(fill)])
+    # Simulate a pre-fix ingested raw page whose byte-identical duplicate row
+    # was collapsed by the old dedupe key.
+    event = parse_activity_row(fill, wallet=GOLDEN_WALLET, raw_fetch_id=raw.raw_fetch_id)
+    session.execute(
+        text(
+            "INSERT INTO wallet_events "
+            "(wallet, event_type, ts, tx_hash, condition_id, token_id, side, "
+            "delta_shares, delta_usdc, price, usdc_size, source, is_derived, raw_ref, "
+            "dedupe_key, ingested_at) "
+            "VALUES (:wallet, :event_type, :ts, :tx_hash, :condition_id, :token_id, :side, "
+            ":delta_shares, :delta_usdc, :price, :usdc_size, :source, 0, :raw_ref, "
+            ":dedupe_key, 'old')"
+        ),
+        {
+            "wallet": event.wallet,
+            "event_type": event.event_type,
+            "ts": event.ts,
+            "tx_hash": event.tx_hash,
+            "condition_id": event.condition_id,
+            "token_id": event.token_id,
+            "side": event.side,
+            "delta_shares": str(event.delta_shares),
+            "delta_usdc": str(event.delta_usdc),
+            "price": str(event.price),
+            "usdc_size": str(event.usdc_size),
+            "source": event.source,
+            "raw_ref": event.raw_ref,
+            "dedupe_key": event.dedupe_key,
+        },
+    )
+    session.execute(
+        text("UPDATE raw_fetches SET ingested_at = 'old' WHERE id = :id"),
+        {"id": raw.raw_fetch_id},
+    )
+    session.commit()
+
+    stats = run_ingest(session, wallet=GOLDEN_WALLET)
+
+    assert stats.events_inserted == 1
+    count = session.execute(
+        text("SELECT COUNT(*) FROM wallet_events WHERE wallet = :w"),
+        {"w": GOLDEN_WALLET},
+    ).scalar()
+    assert count == 2
+
+
 def test_reparse_is_row_for_row_identical(settings, session):
     raw_store = RawStore(settings, session)
     _seed(raw_store, GOLDEN_WALLET, GOLDEN_ROWS)

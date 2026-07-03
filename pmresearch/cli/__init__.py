@@ -14,6 +14,7 @@ from ..logging_setup import setup_logging
 from .fees import fees_group
 from .ingest import ingest_group, ledger_group
 from .markets import markets_group
+from .reconcile import reconcile_group, trust_group
 from .replay import holdings_group, replay_group
 from .sync import sync_group
 from .wallets import wallet_group
@@ -32,6 +33,8 @@ main.add_command(markets_group)
 main.add_command(fees_group)
 main.add_command(replay_group)
 main.add_command(holdings_group)
+main.add_command(reconcile_group)
+main.add_command(trust_group)
 
 
 @main.command()

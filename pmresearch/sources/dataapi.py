@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Callable, Optional
 
 import httpx
@@ -32,6 +33,7 @@ GENESIS_TS = 1609459200
 
 PAGE_LIMIT = 500
 MAX_OFFSET = 3000
+POSITIONS_MAX_OFFSET = 10000
 
 
 @dataclass(frozen=True)
@@ -56,6 +58,62 @@ class FetchOutcome:
             max_ts=max(maxes) if maxes else None,
             requests_made=self.requests_made + other.requests_made,
         )
+
+
+@dataclass(frozen=True)
+class PositionRow:
+    token_id: str
+    size: Decimal
+    avg_price: Decimal
+    cur_price: Decimal
+    current_value: Decimal
+    condition_id: Optional[str]
+    title: Optional[str]
+    outcome: Optional[str]
+    raw: dict
+
+
+@dataclass(frozen=True)
+class PositionsFetchOutcome:
+    raw_fetch_ids: tuple[int, ...]
+    positions: tuple[PositionRow, ...]
+    requests_made: int
+    complete: bool = True
+
+    @property
+    def rows_fetched(self) -> int:
+        return len(self.positions)
+
+
+class PositionsFetchIncomplete(RuntimeError):
+    """Raised when `/positions` pagination reaches the documented offset cap."""
+
+
+def _decimal(value: object) -> Decimal:
+    try:
+        return Decimal(str(value or 0))
+    except (InvalidOperation, ValueError):
+        return Decimal(0)
+
+
+def _parse_position(row: object) -> PositionRow:
+    if not isinstance(row, dict):
+        raise ValueError(f"Unexpected /positions row type: {type(row).__name__}")
+    asset = row.get("asset")
+    if not asset:
+        raise ValueError("/positions row missing required 'asset' token id")
+    condition_id = row.get("conditionId")
+    return PositionRow(
+        token_id=str(asset),
+        size=_decimal(row.get("size")),
+        avg_price=_decimal(row.get("avgPrice")),
+        cur_price=_decimal(row.get("curPrice")),
+        current_value=_decimal(row.get("currentValue")),
+        condition_id=str(condition_id).lower() if condition_id else None,
+        title=str(row["title"]) if row.get("title") is not None else None,
+        outcome=str(row["outcome"]) if row.get("outcome") is not None else None,
+        raw=row,
+    )
 
 
 def _is_offset_cap_error(response: httpx.Response, payload: object) -> bool:
@@ -208,3 +266,64 @@ class DataApiSource:
                 # Reached the cap without exhausting the window: there may be
                 # more rows than we can reach by paging further.
                 return outcome, True
+
+    def fetch_positions(self, raw_store: RawStore, wallet: str) -> PositionsFetchOutcome:
+        """Fetch all current `/positions` rows for `wallet`.
+
+        The Data API's default sizeThreshold is 1 share, which would hide dust
+        and make reconciliation asymmetric, so this always requests
+        sizeThreshold=0. Every page is raw-stored before any parsed row is
+        returned. If the documented offset cap is reached while pages are still
+        full, the result would be partial, so fail instead of comparing it.
+        """
+        wallet = wallet.lower()
+        raw_fetch_ids: list[int] = []
+        positions: list[PositionRow] = []
+        requests_made = 0
+        offset = 0
+
+        while True:
+            params = {
+                "user": wallet,
+                "sizeThreshold": 0,
+                "limit": PAGE_LIMIT,
+                "offset": offset,
+            }
+            response, payload = self._adapter.get_json("/positions", params)
+            response.raise_for_status()
+            if payload is None:
+                rows = []
+            elif isinstance(payload, list):
+                rows = payload
+            else:
+                raise ValueError(
+                    f"Unexpected /positions payload type: {type(payload).__name__}"
+                )
+
+            raw_result = raw_store.persist(
+                source="dataapi",
+                endpoint="positions",
+                wallet=wallet,
+                params=params,
+                payload=rows,
+                http_status=response.status_code,
+            )
+            if not raw_result.deduped:
+                raw_fetch_ids.append(raw_result.raw_fetch_id)
+            requests_made += 1
+            positions.extend(_parse_position(row) for row in rows)
+
+            if len(rows) < PAGE_LIMIT:
+                return PositionsFetchOutcome(
+                    raw_fetch_ids=tuple(raw_fetch_ids),
+                    positions=tuple(positions),
+                    requests_made=requests_made,
+                    complete=True,
+                )
+
+            offset += PAGE_LIMIT
+            if offset > POSITIONS_MAX_OFFSET:
+                raise PositionsFetchIncomplete(
+                    "Data API /positions reached offset cap with a full page; "
+                    "refusing to reconcile partial oracle data."
+                )

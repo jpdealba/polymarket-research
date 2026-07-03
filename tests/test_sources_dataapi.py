@@ -6,7 +6,7 @@ from sqlalchemy import text
 
 from pmresearch.rawstore.store import RawStore
 from pmresearch.sources.base import SourceAdapter
-from pmresearch.sources.dataapi import MAX_OFFSET, DataApiSource
+from pmresearch.sources.dataapi import MAX_OFFSET, DataApiSource, PositionsFetchIncomplete
 
 
 def _make_dataset(start_ts: int, count: int) -> list[dict]:
@@ -44,6 +44,20 @@ class RecordingTransport(httpx.BaseTransport):
         window = [row for row in self.dataset if start <= row["timestamp"] <= end]
         window.sort(key=lambda r: r["timestamp"], reverse=True)
         page = window[offset : offset + limit]
+        return httpx.Response(200, json=page)
+
+
+class PositionsTransport(httpx.BaseTransport):
+    def __init__(self, rows: list[dict]) -> None:
+        self.rows = rows
+        self.requests: list[dict] = []
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        self.requests.append(params)
+        offset = int(params["offset"])
+        limit = int(params["limit"])
+        page = self.rows[offset : offset + limit]
         return httpx.Response(200, json=page)
 
 
@@ -173,3 +187,50 @@ def test_non_json_http_error_body_returns_response_for_caller_to_raise():
         assert False, "expected HTTPStatusError"
     except httpx.HTTPStatusError as exc:
         assert exc.response.status_code == 414
+
+
+def test_fetch_positions_pages_and_raw_stores(settings, session):
+    rows = [
+        {
+            "asset": f"tok{i}",
+            "conditionId": "0xabc",
+            "size": i + 1,
+            "avgPrice": "0.5",
+            "curPrice": "0.6",
+            "currentValue": str((i + 1) * 0.6),
+            "title": "Question",
+            "outcome": "Yes",
+        }
+        for i in range(501)
+    ]
+    transport = PositionsTransport(rows)
+    source = _build_source(transport)
+    raw_store = RawStore(settings, session)
+
+    outcome = source.fetch_positions(raw_store, "0xabc")
+
+    assert outcome.rows_fetched == 501
+    assert outcome.positions[0].token_id == "tok0"
+    assert outcome.positions[0].size == 1
+    assert [int(req["offset"]) for req in transport.requests] == [0, 500]
+    persisted = session.execute(
+        text("SELECT endpoint, row_count, params_json FROM raw_fetches ORDER BY id")
+    ).fetchall()
+    assert [row.endpoint for row in persisted] == ["positions", "positions"]
+    assert [row.row_count for row in persisted] == [500, 1]
+    assert '"sizeThreshold":0' in persisted[0].params_json
+
+
+def test_fetch_positions_incomplete_at_offset_cap_fails(settings, session):
+    rows = [{"asset": f"tok{i}", "size": 1} for i in range(10_500)]
+    transport = PositionsTransport(rows)
+    source = _build_source(transport)
+    raw_store = RawStore(settings, session)
+
+    try:
+        source.fetch_positions(raw_store, "0xabc")
+        assert False, "expected PositionsFetchIncomplete"
+    except PositionsFetchIncomplete:
+        pass
+
+    assert int(transport.requests[-1]["offset"]) == 10_000

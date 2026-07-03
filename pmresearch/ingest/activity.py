@@ -23,15 +23,31 @@ def _fixed(value: object) -> str:
 
 
 def _dedupe_key(
-    wallet: str, tx_hash: str, event_type: str, asset: str, side: str, size: object, price: object, ts: int
+    wallet: str,
+    tx_hash: str,
+    event_type: str,
+    asset: str,
+    side: str,
+    size: object,
+    price: object,
+    ts: int,
+    duplicate_index: int = 0,
 ) -> str:
-    raw = "|".join(
-        [wallet, tx_hash, event_type, asset or "", side or "", _fixed(size), _fixed(price), str(ts)]
-    )
+    parts = [wallet, tx_hash, event_type, asset or "", side or "", _fixed(size), _fixed(price), str(ts)]
+    if duplicate_index:
+        parts.append(f"dup:{duplicate_index}")
+    raw = "|".join(parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def parse_activity_row(row: dict, *, wallet: str, raw_fetch_id: int, source: str = "dataapi") -> WalletEvent:
+def parse_activity_row(
+    row: dict,
+    *,
+    wallet: str,
+    raw_fetch_id: int,
+    source: str = "dataapi",
+    duplicate_index: int = 0,
+) -> WalletEvent:
     event_type = row["type"]
     asset = row.get("asset") or None
     side = row.get("side") or None
@@ -79,7 +95,17 @@ def parse_activity_row(row: dict, *, wallet: str, raw_fetch_id: int, source: str
         )
         token_id = None
 
-    dedupe_key = _dedupe_key(wallet, tx_hash, event_type, asset or "", side or "", size, price, ts)
+    dedupe_key = _dedupe_key(
+        wallet,
+        tx_hash,
+        event_type,
+        asset or "",
+        side or "",
+        size,
+        price,
+        ts,
+        duplicate_index=duplicate_index,
+    )
 
     return WalletEvent(
         wallet=wallet,
@@ -102,6 +128,19 @@ def parse_activity_row(row: dict, *, wallet: str, raw_fetch_id: int, source: str
 def parse_activity_payload(
     rows: list[dict], *, wallet: str, raw_fetch_id: int, source: str = "dataapi"
 ) -> list[WalletEvent]:
-    return [
-        parse_activity_row(row, wallet=wallet, raw_fetch_id=raw_fetch_id, source=source) for row in rows
-    ]
+    seen: dict[str, int] = {}
+    events: list[WalletEvent] = []
+    for row in rows:
+        event = parse_activity_row(row, wallet=wallet, raw_fetch_id=raw_fetch_id, source=source)
+        duplicate_index = seen.get(event.dedupe_key, 0)
+        seen[event.dedupe_key] = duplicate_index + 1
+        if duplicate_index:
+            event = parse_activity_row(
+                row,
+                wallet=wallet,
+                raw_fetch_id=raw_fetch_id,
+                source=source,
+                duplicate_index=duplicate_index,
+            )
+        events.append(event)
+    return events

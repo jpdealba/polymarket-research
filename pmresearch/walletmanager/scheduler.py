@@ -14,6 +14,7 @@ from ..db.engine import get_session_factory
 from ..db.migrations import upgrade_to_head
 from ..logging_setup import setup_logging
 from ..rawstore.store import RawStore
+from ..reconcile.runner import run_reconciliation
 from ..sources.dataapi import DataApiSource
 from ..sources.gamma import GammaSource
 from ..ingest.markets import (
@@ -116,6 +117,21 @@ def run_incremental_cycle(settings: Settings) -> None:
                 )
             except Exception:
                 logger.exception("Incremental sync failed for %s", address)
+                continue
+
+            if outcome.rows_fetched == 0:
+                # Nothing new landed locally, so local state (and the negative-
+                # holdings diagnosis full ledger replay it can trigger) is
+                # unchanged since the last reconciliation run — re-checking
+                # would burn a wallet-scoped replay + an oracle request for no
+                # new information.
+                continue
+
+            try:
+                _, trust = run_reconciliation(session, settings, wallet=address, source=source)
+                logger.info("Reconciliation %s: trust=%s reason=%s", address, trust.status, trust.reason)
+            except Exception:
+                logger.exception("Reconciliation failed for %s", address)
     finally:
         source.close()
         session.close()

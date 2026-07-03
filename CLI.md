@@ -45,6 +45,9 @@ Todos los comandos aceptan `--help` para ver la ayuda integrada.
 | `pmr replay holdings` | `--wallet TEXT`: limita a una wallet; sin flag corre para todas las wallets del ledger | Reconstruye la proyeccion `holdings` (cantidad actual + WAC por wallet x token) replayeando `wallet_events` en orden `(ts, id)`. Reporta warnings de calidad de datos (cantidades negativas, condiciones sin metadata de tokens). |
 | `pmr holdings show` | `--wallet TEXT`: requerido; `--nonzero`: solo holdings por encima del dust epsilon | Muestra la proyeccion de holdings con metadata de mercado (pregunta y outcome) cuando existe. |
 | `pmr holdings dq` | `--wallet TEXT`: requerido; `--json`: salida en JSON en vez de texto | Reporte de calidad de datos (Phase 4): holdings negativos con causa diagnosticada (evento y timestamp), `condition_id` de MERGE/REDEEM sin match en `markets` (clasificados como bug de encoding bytea `\x` vs `0x`, o realmente no disponibles en Gamma), holdings sin metadata de token, y eventos fuera del enum documentado del ledger (p. ej. `CONVERSION`). Solo lectura; no cambia `wallet_events` ni `holdings`. |
+| `pmr reconcile run` | `--wallet TEXT`: requerido; `--json`: salida JSON estable | Ejecuta reconciliacion Phase 5 contra Data API `/positions`: raw-storea las respuestas, compara `positions.size` contra `holdings.qty` por `token_id`, persiste facts y actualiza `wallet_trust`. La salida JSON expone `wallet_trust`, `known_exception_count`, `known_exceptions` y `analytics_trust_caveat` para que reportes downstream no oculten wallets no confiables. |
+| `pmr reconcile status` | `--wallet TEXT`: opcional | Muestra la ultima reconciliacion por wallet: conteos, trust, excepciones conocidas, top discrepancias por cantidad/notional, negativos y holdings sin metadata presentes en `/positions`. |
+| `pmr trust status` | `--wallet TEXT`: opcional | Muestra el estado derivado de confianza de cada wallet (`trusted`, `warn`, `untrusted`) y la razon de la ultima reconciliacion. |
 
 ## Flujos comunes
 
@@ -58,4 +61,7 @@ pmr fees report --wallet 0x... --by-category --pre-post-sports-fee
 pmr replay holdings --wallet 0x...
 pmr holdings show --wallet 0x... --nonzero
 pmr holdings dq --wallet 0x...
+pmr reconcile run --wallet 0x...
+pmr reconcile status
+pmr trust status
 ```

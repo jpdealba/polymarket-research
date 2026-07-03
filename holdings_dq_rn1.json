@@ -1,0 +1,1458 @@
+{
+  "wallet": "0x2005d16a84ceefa912d4e380cd32e7ff827875ea",
+  "negative_holdings_summary": {
+    "negative_token_count": 14,
+    "negative_condition_count": 9,
+    "paired_equal_magnitude_conditions": 5,
+    "total_negative_qty": "-90999.463791",
+    "cause_event_type_counts": {
+      "MERGE": 12,
+      "TRADE": 2
+    }
+  },
+  "negative_holdings_detail": [
+    {
+      "token_id": "51934524574122324834697413723027497348271212540826777753437696207389328583504",
+      "qty": "-14864.0903",
+      "wac_cost": "0",
+      "as_of_ts": 1779374854,
+      "condition_id": "0x2d2d11b108e21ac44a8faa10f7b7ba43272b328d35e9b481a51d183f95da9e5c",
+      "outcome_label": "Camila Osorio",
+      "question": "GP SAR La Princesse Lalla Meryem: Camila Osorio vs Panna Udvardy",
+      "category": "Sports",
+      "closed": true,
+      "cause_event_id": 691894,
+      "cause_event_type": "MERGE",
+      "cause_event_ts": 1779374854
+    },
+    {
+      "token_id": "79323772138304318467539149848624900754254262971442865580112299670828217003659",
+      "qty": "-14864.0903",
+      "wac_cost": "0",
+      "as_of_ts": 1779374854,
+      "condition_id": "0x2d2d11b108e21ac44a8faa10f7b7ba43272b328d35e9b481a51d183f95da9e5c",
+      "outcome_label": "Panna Udvardy",
+      "question": "GP SAR La Princesse Lalla Meryem: Camila Osorio vs Panna Udvardy",
+      "category": "Sports",
+      "closed": true,
+      "cause_event_id": 691894,
+      "cause_event_type": "MERGE",
+      "cause_event_ts": 1779374854
+    },
+    {
+      "token_id": "52882651311233218011964847714846665539372984613458132849170448778173545297571",
+      "qty": "-4.997783",
+      "wac_cost": "0",
+      "as_of_ts": 1775679129,
+      "condition_id": "0x71c1299907428e3dc2b311afc7e0fa56a16f8d92b02aae3b25f9134f6932fa4b",
+      "outcome_label": "Yes",
+      "question": "Will SC Braga vs. Real Betis Balompié end in a draw?",
+      "category": "Sports",
+      "closed": true,
+      "cause_event_id": 1733230,
+      "cause_event_type": "MERGE",
+      "cause_event_ts": 1775679129
+    },
+    {
+      "token_id": "59880265195995334934669367383530286127953489732062523515730749463314801350746",
+      "qty": "-42.67",
+      "wac_cost": "0",
+      "as_of_ts": 1773064559,
+      "condition_id": "0x72f830efb30186a98f8947aa4de77a20f7d69456c1bf4e4d61a7b3ea077820bc",
+      "outcome_label": "Grand Canyon Antelopes",
+      "question": "San Diego State Aztecs vs. Grand Canyon Antelopes",
+      "category": "Sports",
+      "closed": true,
+      "cause_event_id": 2648369,
+      "cause_event_type": "TRADE",
+      "cause_event_ts": 1773064197
+    },
+    {
+      "token_id": "28747443588967839480570826005621402074699638500855865951369373705368737364634",
+      "qty": "-0.000031",
+      "wac_cost": "0",
+      "as_of_ts": 1777236856,
+      "condition_id": "0xa2313c151b76461e9db8c49564d0f3c9ffa109a3edd696ab9e74246be366a938",
+      "outcome_label": "No",
+      "question": "Will Viborg FF vs. FC Nordsjælland end in a draw?",
+      "category": "Sports",
+      "closed": true,
+      "cause_event_id": 1217632,
+      "cause_event_type": "MERGE",
+      "cause_event_ts": 1777236856
+    },
+    {
+      "token_id": "45534534906455080240598758440881578246431097641178460825515741161776345865968",
+      "qty": "-0.000031",
+      "wac_cost": "0",
+      "as_of_ts": 1777236856,
+      "condition_id": "0xa2313c151b76461e9db8c49564d0f3c9ffa109a3edd696ab9e74246be366a938",
+      "outcome_label": "Yes",
+      "question": "Will Viborg FF vs. FC Nordsjælland end in a draw?",
+      "category": "Sports",
+      "closed": true,
+      "cause_event_id": 1217632,
+      "cause_event_type": "MERGE",
+      "cause_event_ts": 1777236856
+    },
+    {
+      "token_id": "19878060098533884873986492631786782983377423138648817239031400929566008374738",
+      "qty": "-0.000024",
+      "wac_cost": "0",
+      "as_of_ts": 1777236856,
+      "condition_id": "0xa2a1daba6db6a8ad5374cd43384c6500ed66ee5ef0e7a01d2154b9ed9a4e5958",
+      "outcome_label": "Yes",
+      "question": "Will Viborg FF win on 2026-04-26?",
+      "category": "Sports",
+      "closed": true,
+      "cause_event_id": 1217631,
+      "cause_event_type": "MERGE",
+      "cause_event_ts": 1777236856
+    },
+    {
+      "token_id": "36888829051060577309343687994399741700335101848043927452462953719105295211479",
+      "qty": "-0.000024",
+      "wac_cost": "0",
+      "as_of_ts": 1777236856,
+      "condition_id": "0xa2a1daba6db6a8ad5374cd43384c6500ed66ee5ef0e7a01d2154b9ed9a4e5958",
+      "outcome_label": "No",
+      "question": "Will Viborg FF win on 2026-04-26?",
+      "category": "Sports",
+      "closed": true,
+      "cause_event_id": 1217631,
+      "cause_event_type": "MERGE",
+      "cause_event_ts": 1777236856
+    },
+    {
+      "token_id": "114222968452411435892290803678749666730844723408659761824242362083338996397894",
+      "qty": "-30289.0934",
+      "wac_cost": "0",
+      "as_of_ts": 1775752773,
+      "condition_id": "0xc1ea54ed3dad5b0c79c24e706949169cb64517172f6b6e01255c0d27711c3994",
+      "outcome_label": "Franco Agamenone",
+      "question": "Madrid: Nerman Fatic vs Franco Agamenone",
+      "category": "Sports",
+      "closed": true,
+      "cause_event_id": 1712228,
+      "cause_event_type": "MERGE",
+      "cause_event_ts": 1775752773
+    },
+    {
+      "token_id": "11518814155164995812864506229047984353400421586935952004604431713236011724426",
+      "qty": "-30289.0934",
+      "wac_cost": "0",
+      "as_of_ts": 1775752773,
+      "condition_id": "0xc1ea54ed3dad5b0c79c24e706949169cb64517172f6b6e01255c0d27711c3994",
+      "outcome_label": "Nerman Fatic",
+      "question": "Madrid: Nerman Fatic vs Franco Agamenone",
+      "category": "Sports",
+      "closed": true,
+      "cause_event_id": 1712228,
+      "cause_event_type": "MERGE",
+      "cause_event_ts": 1775752773
+    },
+    {
+      "token_id": "78872993221767917982108995604621456694526897574300252505474345945076467510366",
+      "qty": "-624.998368",
+      "wac_cost": "0",
+      "as_of_ts": 1773258501,
+      "condition_id": "0xd9b2390afd8a78258cc6cd8ce931fe4fe90c77c3df2834e04dd4d8dd994f73b5",
+      "outcome_label": "No",
+      "question": "Will Bayer 04 Leverkusen win on 2026-03-11?",
+      "category": "Sports",
+      "closed": true,
+      "cause_event_id": 2627863,
+      "cause_event_type": "TRADE",
+      "cause_event_ts": 1773258501
+    },
+    {
+      "token_id": "14188485965465751809479452159505117221994254244442299182065565815499035744676",
+      "qty": "-0.000065",
+      "wac_cost": "0",
+      "as_of_ts": 1777236856,
+      "condition_id": "0xf19c03609dedb708baf07bc8ce808a39b49b7c8e4bdeee2727f52e1153f714db",
+      "outcome_label": "Yes",
+      "question": "Will FC Nordsjælland win on 2026-04-26?",
+      "category": "Sports",
+      "closed": true,
+      "cause_event_id": 1217633,
+      "cause_event_type": "MERGE",
+      "cause_event_ts": 1777236856
+    },
+    {
+      "token_id": "81100129692338468259346626877626958831402984357677209038812957976421804960118",
+      "qty": "-0.000065",
+      "wac_cost": "0",
+      "as_of_ts": 1777236856,
+      "condition_id": "0xf19c03609dedb708baf07bc8ce808a39b49b7c8e4bdeee2727f52e1153f714db",
+      "outcome_label": "No",
+      "question": "Will FC Nordsjælland win on 2026-04-26?",
+      "category": "Sports",
+      "closed": true,
+      "cause_event_id": 1217633,
+      "cause_event_type": "MERGE",
+      "cause_event_ts": 1777236856
+    },
+    {
+      "token_id": "82063955381283455897179063570747383880537810812742671689740922772706618719352",
+      "qty": "-20.43",
+      "wac_cost": "0",
+      "as_of_ts": 1771690266,
+      "condition_id": "0xf1ff3700482756f60a7c097d34c55e850e72014234abcc07c602c43eb5886966",
+      "outcome_label": "Yes",
+      "question": "Will Juventus FC vs. Como 1907 end in a draw?",
+      "category": "Sports",
+      "closed": true,
+      "cause_event_id": 2750812,
+      "cause_event_type": "MERGE",
+      "cause_event_ts": 1771690266
+    }
+  ],
+  "missing_conditions": [
+    {
+      "condition_id": "0xdc6d6e8b7436863baec6c226eddc8aa51b1d64c1831322469eb344248b131ef0",
+      "event_count": 128,
+      "event_types": "TRADE",
+      "total_usdc_size": "35226.768953",
+      "first_ts": 1783078865,
+      "last_ts": 1783087330,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xd7f43f661124f2df6b1ef8fcb90c1262bfd12f4e6c9f0a87d68689217db91c6c",
+      "event_count": 43,
+      "event_types": "TRADE",
+      "total_usdc_size": "3619.207209",
+      "first_ts": 1783078817,
+      "last_ts": 1783086125,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xf5a7fe4cc3758f2f09a7c4d344f5fecd95adae605ad43dd0c35bc2f2eaae65db",
+      "event_count": 39,
+      "event_types": "TRADE",
+      "total_usdc_size": "3439.771586",
+      "first_ts": 1783080704,
+      "last_ts": 1783087343,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x783ce23a43d0e52878863065e9c04ffc32b0335b7cc4a526c9fa81490b84843c",
+      "event_count": 30,
+      "event_types": "TRADE",
+      "total_usdc_size": "1929.931524",
+      "first_ts": 1783080257,
+      "last_ts": 1783087274,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x8041e9e2ad412a2494c392176e7ccf93f4ae1dc68e6f2330229de25e366fca0e",
+      "event_count": 24,
+      "event_types": "TRADE",
+      "total_usdc_size": "1458.103294",
+      "first_ts": 1783080164,
+      "last_ts": 1783087295,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x8bd798cf5ae4a6dc0d5770852cbd41366481173aae585d1c99f0f7a27beab13c",
+      "event_count": 22,
+      "event_types": "REDEEM,TRADE",
+      "total_usdc_size": "5318.230096",
+      "first_ts": 1783080593,
+      "last_ts": 1783086320,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xf3bd10b1188bee95e5a244d663dfb5c02907741b1240982be7f96cc159f2073a",
+      "event_count": 20,
+      "event_types": "TRADE",
+      "total_usdc_size": "2135.789882",
+      "first_ts": 1783080851,
+      "last_ts": 1783086769,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x8beb515983d1245bae57fc0e0db1a75c7f1fe9184bce5a733ffa95aef350f764",
+      "event_count": 18,
+      "event_types": "TRADE",
+      "total_usdc_size": "1080.0",
+      "first_ts": 1755814261,
+      "last_ts": 1755814419,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x4016541448cb9c083ae08f11497362892d805222d5809a75d2e9a47ee035fb1d",
+      "event_count": 14,
+      "event_types": "TRADE",
+      "total_usdc_size": "542.392323",
+      "first_ts": 1783082476,
+      "last_ts": 1783087088,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x77e401d048013db148cdcbd523630d70ae9d6dc22c446457b4d9787e6409796b",
+      "event_count": 13,
+      "event_types": "TRADE",
+      "total_usdc_size": "764.52196",
+      "first_ts": 1783080094,
+      "last_ts": 1783082107,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x4a575a7cce7e0a3d40e3b92bb5ef3f00882c9e51e2ae41ac7d727d0ee5a10a9d",
+      "event_count": 12,
+      "event_types": "TRADE",
+      "total_usdc_size": "4617.702038",
+      "first_ts": 1783084724,
+      "last_ts": 1783086674,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x3744c61511e4ffce1cde87f8cf443c5b138478ccf106f5c0d9e97d6531946021",
+      "event_count": 10,
+      "event_types": "TRADE",
+      "total_usdc_size": "310.930641",
+      "first_ts": 1783081541,
+      "last_ts": 1783085434,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x79c136cff02cddb10becc037442d4743d351d9a6671c9f197b7ae9b72ef0c161",
+      "event_count": 10,
+      "event_types": "TRADE",
+      "total_usdc_size": "308.90905000000004",
+      "first_ts": 1783080322,
+      "last_ts": 1783083143,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x8b55c97e867bbad8c5f1b1976766f6b9d8e88fe5a92b4cad679d78018c26e928",
+      "event_count": 7,
+      "event_types": "TRADE",
+      "total_usdc_size": "25.92981",
+      "first_ts": 1783084646,
+      "last_ts": 1783084652,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xe94028d18d13d6347fdfa0e61af1c5467da98e5f8529d104bde00cc2c9888d75",
+      "event_count": 7,
+      "event_types": "TRADE",
+      "total_usdc_size": "191.481444",
+      "first_ts": 1783084280,
+      "last_ts": 1783086635,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xeecca6fdfdd247cf6768f2233e503ec47b01daa8bc0d53680f1130685e96fa22",
+      "event_count": 7,
+      "event_types": "TRADE",
+      "total_usdc_size": "2922.442413",
+      "first_ts": 1783080736,
+      "last_ts": 1783082863,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x2ab9c70fdd1e64f2858ba4f856a169fbd6b22ca35e36d0cb0eae0260235e6563",
+      "event_count": 6,
+      "event_types": "TRADE",
+      "total_usdc_size": "457.25764200000003",
+      "first_ts": 1783084082,
+      "last_ts": 1783087231,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xa57752ec7468fb0099b3a056cfa2cc3f5155c36945c75abeec5ccc7affe0814e",
+      "event_count": 6,
+      "event_types": "TRADE",
+      "total_usdc_size": "125.847033",
+      "first_ts": 1783084510,
+      "last_ts": 1783087282,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x9ade9090639dc9a5b19f327d4302b1ac8b291a54d1aff85612164bead67751df",
+      "event_count": 5,
+      "event_types": "TRADE",
+      "total_usdc_size": "157.08143399999997",
+      "first_ts": 1783081516,
+      "last_ts": 1783085512,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x0d395aca2233ef0543681a7a131876a8d4e36d76e4ffb881867a5760f322a730",
+      "event_count": 4,
+      "event_types": "TRADE",
+      "total_usdc_size": "5.240293",
+      "first_ts": 1783078763,
+      "last_ts": 1783080419,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x62893c1171b6e2c91ade4cda7d770f2e43e6b965a196c92dad6ac82666002e18",
+      "event_count": 3,
+      "event_types": "TRADE",
+      "total_usdc_size": "77.42316100000001",
+      "first_ts": 1783087330,
+      "last_ts": 1783087333,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x7ef91b65006b868abac92f4bd72078f0b154697021a4e4575dd2a6fa5c1ec5cc",
+      "event_count": 3,
+      "event_types": "TRADE",
+      "total_usdc_size": "26.816495999999997",
+      "first_ts": 1783081652,
+      "last_ts": 1783085533,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xe2ed6cfe00fc17e671c3a6e1de68be244dccb233b32e40902454dd95df9c60f5",
+      "event_count": 3,
+      "event_types": "TRADE",
+      "total_usdc_size": "4619.7",
+      "first_ts": 1783082756,
+      "last_ts": 1783082791,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xe9e557fdfc2cf10bf2d20ce02badd201257a0f490a99e814418d32c5ab1c9f08",
+      "event_count": 3,
+      "event_types": "TRADE",
+      "total_usdc_size": "32.126795",
+      "first_ts": 1783082513,
+      "last_ts": 1783086380,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x69ddcba6f3c78c2e121b36f8eafa640885fa1bf81c36c18175447d3ae10ee70e",
+      "event_count": 2,
+      "event_types": "TRADE",
+      "total_usdc_size": "21.7252",
+      "first_ts": 1783082512,
+      "last_ts": 1783086271,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x6ad8930c82f9483a966f6640974215fa9e98032b389c2ad59ed6e9bb820fe0a1",
+      "event_count": 2,
+      "event_types": "TRADE",
+      "total_usdc_size": "4.18404",
+      "first_ts": 1783086122,
+      "last_ts": 1783086779,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x8eeffa03baaafd936917e737b23b73c04ec785d0f555de858b874d4f4adf4830",
+      "event_count": 2,
+      "event_types": "TRADE",
+      "total_usdc_size": "31.139650000000003",
+      "first_ts": 1783080071,
+      "last_ts": 1783080079,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xa66b0dc5d126cd76a7434ff4782acfb59c267130afea696d71fefaea98beb381",
+      "event_count": 2,
+      "event_types": "TRADE",
+      "total_usdc_size": "12700.0",
+      "first_ts": 1783086464,
+      "last_ts": 1783086464,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xdd88fb4142e02f476f1cfec822be65a4f017f9e5e32c60dde2e2829dbd7a5efb",
+      "event_count": 2,
+      "event_types": "TRADE",
+      "total_usdc_size": "4550.0",
+      "first_ts": 1783084792,
+      "last_ts": 1783084807,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x0cbeed5abae06e3ee505013c3915750dc22c4f343534e286f77c5eaa45d3fb41",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773004895,
+      "last_ts": 1773004895,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x0cc516421240340fe71f03085be65f5cfa99bc609da29353cf3c347d6ef191d2",
+      "event_count": 1,
+      "event_types": "TRADE",
+      "total_usdc_size": "2.518228",
+      "first_ts": 1783086659,
+      "last_ts": 1783086659,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x0e503c5e76d6ca1dace43b9dbeded56665c29a7c188ef2bc4b2d1e3610972d09",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773006905,
+      "last_ts": 1773006905,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x1217bc61817261b9295c3fdbbb7ec45142257867c0cdd41517d422c972cab085",
+      "event_count": 1,
+      "event_types": "TRADE",
+      "total_usdc_size": "111.149259",
+      "first_ts": 1783081165,
+      "last_ts": 1783081165,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x131b48a6b2630c02c373b26931935342321a0e1380830adafb108c8b5e2d7db9",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1772907721,
+      "last_ts": 1772907721,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x18a178e100853a7e06a948dabf03a8c5a83154ccb540d4d4517013bd9fea8149",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1772996317,
+      "last_ts": 1772996317,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x1f5d02256f2b9c0a5b490293156b791aff3d1c3c2bf4717c9e1bbd2635dc6640",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773005927,
+      "last_ts": 1773005927,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x23d9b7ee6da0cdbe502c6f61d910bf73bba32b52297c2ae63554fe41029d2b9c",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773006445,
+      "last_ts": 1773006445,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x2b52103bcf22aaba7b2c3447719468a4648ee1b4e30790d64294d424863d027a",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773002709,
+      "last_ts": 1773002709,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x2cf00b6be5a1170503735b10058bd55e2f625b293575c7e52ac74fa75385cf5e",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773005835,
+      "last_ts": 1773005835,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x3072fbdfa4e5a88f89df42b5acb64e4953bcaabbd3d41d45a0875924c4bff0ce",
+      "event_count": 1,
+      "event_types": "TRADE",
+      "total_usdc_size": "0.2356",
+      "first_ts": 1783082713,
+      "last_ts": 1783082713,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x311bf70a408561ea876365379dec38f845a7105ebf391c39b363d761c5adfa9f",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773001129,
+      "last_ts": 1773001129,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x32d1116064d098fe9c993a0440b4ba2a5e211d415ab9b95697964541a969fe5f",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773003351,
+      "last_ts": 1773003351,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x369782cdfda0172774bbf0f0316825685b172ad8193b0008f16093627b4e3e00",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1772996457,
+      "last_ts": 1772996457,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x381c7b898bc05b3f3919983b3f41059a3deb52d688fb326644c0b6a65bdbe3b3",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773005045,
+      "last_ts": 1773005045,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x3add8d6151a9aabb9cd47b2eeebc1d96ea591dc8e249f5c37e36a167b7bf0168",
+      "event_count": 1,
+      "event_types": "TRADE",
+      "total_usdc_size": "1319.53259",
+      "first_ts": 1783086241,
+      "last_ts": 1783086241,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x3b93cab6f49e9ee365d87fba1b8f49d7a62bbcfc0038d5d7a355389cfdd9cf15",
+      "event_count": 1,
+      "event_types": "TRADE",
+      "total_usdc_size": "189.808",
+      "first_ts": 1783082650,
+      "last_ts": 1783082650,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x4010dc32a4cc21651255e9898d45ec5b56a2baff014914cdb024a667de9a648a",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773005389,
+      "last_ts": 1773005389,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x4c761255440894f545098210998ed9a1252048d527a433e3e7794964cba7dbc3",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773004571,
+      "last_ts": 1773004571,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x4ec4164d304c3c3ce80ce34bffb949dc99e43f4641286746b20a436b1b711304",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773005783,
+      "last_ts": 1773005783,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x5023a22d8f707e458a600394de3571651b1f937c957f1dad31a1f40c462bf4bb",
+      "event_count": 1,
+      "event_types": "TRADE",
+      "total_usdc_size": "0.5",
+      "first_ts": 1783082480,
+      "last_ts": 1783082480,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x552d2d26aeb698cedfea041b9073c1df49ac0b766459804f2cf69f6c9114cf65",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773001439,
+      "last_ts": 1773001439,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x561a4477231b2d1e57c7cfb64ad58a6f1c6aa2107d2c55364fcc1ed4dbcc3512",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "10.0",
+      "first_ts": 1764230575,
+      "last_ts": 1764230575,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x56f7b6262dc228f4a7c5deba6560a247302790f95468ac13b83c432c147a9d64",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773005763,
+      "last_ts": 1773005763,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x6a93ade88b47abbd08d68f24ec70617e41dfb4348ac8d98f01d2accb4c35b451",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773002691,
+      "last_ts": 1773002691,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x6fb3f94492af179ab710e03f842372585dcee22905af5816374de92f206ccb0a",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1772991235,
+      "last_ts": 1772991235,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x72db13fb1e5ceb7f98b4d42316ee14ccf27dc0b4cde065bb4a13fab0bcfbc017",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773006931,
+      "last_ts": 1773006931,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x7bf7c63b41fb56692f2cebe3af6bad2e807d12d8ef88bec27706c42edbe6fc73",
+      "event_count": 1,
+      "event_types": "TRADE",
+      "total_usdc_size": "3957.081826",
+      "first_ts": 1783085593,
+      "last_ts": 1783085593,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x7ceda19628511201befeaf237aa54dcf3727a50f71f417896c1765f0a839d6cc",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773005795,
+      "last_ts": 1773005795,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x817e4083c0b198d47a4ec18d4c4727de7758784cac0ef121010b64ea080229d1",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773006627,
+      "last_ts": 1773006627,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x82745518c28650ca4fb2773163a82f3200f0b9493a945fd5e6eb4968e49fa5d6",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773006099,
+      "last_ts": 1773006099,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x828bd58f0b7b6daea37d5be7b14e19527d9e069857c14086f118089914899faa",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773005049,
+      "last_ts": 1773005049,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x84287af30216cb38355948330f61733e1aa82abc08a538094aab4dc4b005f300",
+      "event_count": 1,
+      "event_types": "CONVERSION",
+      "total_usdc_size": "10.0",
+      "first_ts": 1767001445,
+      "last_ts": 1767001445,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x8441e3a74a2700e806e34fbe7a80f6fd13955921e7c2d812706974a097360ffd",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1772991905,
+      "last_ts": 1772991905,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x849b8fef20f40757f7260ad189d7ff75e7b009a01224983507d3a724a3fd833d",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773007017,
+      "last_ts": 1773007017,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x9b465e68a65edabe99237fe3c7f20e417120bcac6cb9405f2c6ba787bbb074a9",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773006791,
+      "last_ts": 1773006791,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x9f3314a515e8a2efe61c96eb77bb40406d5607de7d0dafb2871d84ddc927d18a",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1772991233,
+      "last_ts": 1772991233,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0x9fbfc939c496eaaf64ff8731063a62ae7ed5a60650670be93d2d0b69a2a56a90",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773006795,
+      "last_ts": 1773006795,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xa1e39896a8bcfe5a52494ca1ec9a7263f0ebe70f832df58fe0185e23beb32c79",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773004923,
+      "last_ts": 1773004923,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xa4035e61d1170a49e3da9af0776f23948845f1c46db0d927a590bc4e87955e89",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773006483,
+      "last_ts": 1773006483,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xb111bbf19c2141f101eee59816032275ceb6130baa182aa185d5c439fb55e7ec",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773006367,
+      "last_ts": 1773006367,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xb8aaa5de6f4066111520da2732518d74d0995a5889c2df3d4530e8edac06ddce",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773006367,
+      "last_ts": 1773006367,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xbc1f5587ae08e43f39991661c514ed54442d9b948f7626e731fe6c24e6c063f4",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773005087,
+      "last_ts": 1773005087,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xbdf09ed56b7c62d3a41f41b825ee19f7bc822cd21f156d10cf4f02e3d9a760fc",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1772986579,
+      "last_ts": 1772986579,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xbe6c12aaff4dfbc650295ab8061b06e0c505e8df6a16b87a2bb3ae364f4447f5",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "5.0",
+      "first_ts": 1764230575,
+      "last_ts": 1764230575,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xbf6027c94f963603322a74bb1861b7ba45c264520d6720dd7c233edf9035cb9d",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773006553,
+      "last_ts": 1773006553,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xc7a7955accdadef4d862003688f2d629fcc391dd10e9a7ad99d71c5529b5b2a1",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1772896619,
+      "last_ts": 1772896619,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xca46703416883e8c59d12ef3a785202aec09657f44dec1d7a3d469484d2b3c38",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773004719,
+      "last_ts": 1773004719,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xce7439630f6ea2e7cbaa42d84d035fc0e7886128e325f2765c28fe902e03bd33",
+      "event_count": 1,
+      "event_types": "TRADE",
+      "total_usdc_size": "9.537268",
+      "first_ts": 1783087207,
+      "last_ts": 1783087207,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xced6064c297fdf13140a64f23db982f94fbb6623e7a352e31378bf97e4c742ea",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "20.0",
+      "first_ts": 1752401745,
+      "last_ts": 1752401745,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xd3db6b32d51c1924e010b7cf683970817b1ea1f4a56f570b036f25d6e14a8f4a",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1752401745,
+      "last_ts": 1752401745,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xe003c9f04f3b22c00c24b5ec4693238072374231f925692e3b31b0ba75d8f185",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773005987,
+      "last_ts": 1773005987,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xe34415a869c0a8553f84c33fffac8f7ca1245e321319d21189a844f79bec0428",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "30.769229",
+      "first_ts": 1764818177,
+      "last_ts": 1764818177,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xe45727542a2f43bb2bb76d9e9cc258db18f064568522918e5a84bad51ce02c62",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773005063,
+      "last_ts": 1773005063,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xe6e7232371d3d0498258122b69e9889c3341ad3eeb0d8cd1851a91f585f70140",
+      "event_count": 1,
+      "event_types": "TRADE",
+      "total_usdc_size": "819.09",
+      "first_ts": 1783086020,
+      "last_ts": 1783086020,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xea3e4f398c4ce0b3d6dc24d60c0160487af9ceb7615a0cb430bbc3a2e90fe8cd",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773004499,
+      "last_ts": 1773004499,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xf58054d0814d06da9a02be46c25f63239198c2c656d297ddac95c7cca9aeb665",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773007271,
+      "last_ts": 1773007271,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xf82659518fe9d6680ab6b19258dba144caf811efd8f76f1bd946b465fc9abceb",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773006833,
+      "last_ts": 1773006833,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xfec2532f274b3cc665009bb9c796f42a672f5e3fbab12a4a6856d9272e3c0162",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "0",
+      "first_ts": 1773006411,
+      "last_ts": 1773006411,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    },
+    {
+      "condition_id": "0xffeb34053798fe166d9ebfb65f2f488f8778e0ccb102c036d71e268ca4ddb969",
+      "event_count": 1,
+      "event_types": "REDEEM",
+      "total_usdc_size": "20.0",
+      "first_ts": 1752401745,
+      "last_ts": 1752401745,
+      "classification": "unavailable_upstream",
+      "normalized_match_question": null
+    }
+  ],
+  "missing_token_metadata": [
+    {
+      "token_id": "10066515263624444048930575098242111434376095579694451759060288204632664603610",
+      "qty": "55.169805",
+      "wac_cost": "0.4700000299076641652077617458",
+      "as_of_ts": 1783084652
+    },
+    {
+      "token_id": "104413649571698841474314386088002295972113391813845127646415142778442612608501",
+      "qty": "304",
+      "wac_cost": "0.69",
+      "as_of_ts": 1783081630
+    },
+    {
+      "token_id": "109318019466993430757421782413061116146978525529496374105596439176255361621702",
+      "qty": "192.608707",
+      "wac_cost": "0.3804293696857639981976515735",
+      "as_of_ts": 1783086635
+    },
+    {
+      "token_id": "110220126164144811798956370986913296479165471916547583534454165504633090745741",
+      "qty": "475.99",
+      "wac_cost": "0.9194069623311414105338347444",
+      "as_of_ts": 1783087231
+    },
+    {
+      "token_id": "110382362387983746054632816398326205371905766774975490807423218595357880397357",
+      "qty": "2275.056189",
+      "wac_cost": "0.5800000001670288416775450463",
+      "as_of_ts": 1783086241
+    },
+    {
+      "token_id": "112578896784028603428321468819583477922200968205114416972996226770810604367763",
+      "qty": "2806.605355",
+      "wac_cost": "0.5206280531735107446198113593",
+      "as_of_ts": 1783086125
+    },
+    {
+      "token_id": "115634330805756514188959224526194668986955994172194316777393307838342533176262",
+      "qty": "1039.068284",
+      "wac_cost": "0.3387510680674380010236170388",
+      "as_of_ts": 1783087274
+    },
+    {
+      "token_id": "12808577764490850939690431186349319442907832201217699822612171885180605623676",
+      "qty": "1107.671903",
+      "wac_cost": "0.2239408667207116112974114141",
+      "as_of_ts": 1783087088
+    },
+    {
+      "token_id": "15735307835072168313527600207513387711777847227924131546980396325506342741951",
+      "qty": "275.401957",
+      "wac_cost": "0.4727706419312045774605733829",
+      "as_of_ts": 1783082107
+    },
+    {
+      "token_id": "16156939854489442982963237305087870611786017937890820864358740231433660982199",
+      "qty": "355.524631",
+      "wac_cost": "0.4390262175674686235733692387",
+      "as_of_ts": 1783085512
+    },
+    {
+      "token_id": "16441468057978679575250987754532931004104737868907251957930664416526599199008",
+      "qty": "5765.463332",
+      "wac_cost": "0.4431057116989396541009863108",
+      "as_of_ts": 1783087343
+    },
+    {
+      "token_id": "19109633501637134853994322213014811095625026932182373494192573380408764679612",
+      "qty": "1.24",
+      "wac_cost": "0.19",
+      "as_of_ts": 1783082713
+    },
+    {
+      "token_id": "20405595595846344552006617495657499541836603415333454650175007079062206590744",
+      "qty": "2654.88",
+      "wac_cost": "0.1354733132947628518049780028",
+      "as_of_ts": 1783087295
+    },
+    {
+      "token_id": "23643265866097498551191679412793039385459530397864929214236473482700628224471",
+      "qty": "184.897433",
+      "wac_cost": "0.6393135539096424340298980787",
+      "as_of_ts": 1783086409
+    },
+    {
+      "token_id": "26892902358458533578207123355889428152875583050851263648945812342244206365947",
+      "qty": "1512.848250",
+      "wac_cost": "0.5850301595021179421002734412",
+      "as_of_ts": 1783087253
+    },
+    {
+      "token_id": "29786202691480638356207538597473688711270118079571330461777199792513305681652",
+      "qty": "2",
+      "wac_cost": "0.991",
+      "as_of_ts": 1783086779
+    },
+    {
+      "token_id": "29837459145040214459019594053818505927067979130486442073368825626893961087735",
+      "qty": "1500",
+      "wac_cost": "0.72",
+      "as_of_ts": 1755814419
+    },
+    {
+      "token_id": "35539097608034302402218900370251110013654424667236742944260433685764479030455",
+      "qty": "15.738925",
+      "wac_cost": "0.16",
+      "as_of_ts": 1783086659
+    },
+    {
+      "token_id": "37483810838905141459312911957423352390730228282284508325603887723158414916776",
+      "qty": "20000",
+      "wac_cost": "0.635",
+      "as_of_ts": 1783086464
+    },
+    {
+      "token_id": "39217053750206191523793193890880268288191824918303577917151382672703438693685",
+      "qty": "15299",
+      "wac_cost": "0.1033963004117916203673442709",
+      "as_of_ts": 1783085239
+    },
+    {
+      "token_id": "39322089660502884706011881979766279258480977335694314822021045408087763552971",
+      "qty": "187.005254",
+      "wac_cost": "0.05100000024598239362836297637",
+      "as_of_ts": 1783087207
+    },
+    {
+      "token_id": "42155104607458189803517472991107233502045506354235874691666968272346904138946",
+      "qty": "148.261766",
+      "wac_cost": "0.04108845567103254388592673313",
+      "as_of_ts": 1783083143
+    },
+    {
+      "token_id": "42169412562403022348936696488660437334469695038451793321035378920877675837646",
+      "qty": "2042.549721",
+      "wac_cost": "0.4713995415145147401775293185",
+      "as_of_ts": 1783086769
+    },
+    {
+      "token_id": "44244598396818583981746718848011016824261420743309927663745504145526605635962",
+      "qty": "1.78",
+      "wac_cost": "0.56",
+      "as_of_ts": 1783085158
+    },
+    {
+      "token_id": "45391092303192834460063004536253031758655934052927187517190754971700302876623",
+      "qty": "389.972623",
+      "wac_cost": "0.2594301113286098547487011672",
+      "as_of_ts": 1783085434
+    },
+    {
+      "token_id": "50237869275512881062230572526113401703194645041862475743619298443254099106412",
+      "qty": "1664.125639",
+      "wac_cost": "0.9523579024672427392364693926",
+      "as_of_ts": 1783083823
+    },
+    {
+      "token_id": "50882013013415517111387437495342607074264761895170845857291237346396214211208",
+      "qty": "152.259258",
+      "wac_cost": "0.7300000043347117848163952040",
+      "as_of_ts": 1783081165
+    },
+    {
+      "token_id": "51160751326734672785709627948584435919933207815904032900644632008062897426276",
+      "qty": "3567.788036",
+      "wac_cost": "0.8509031386863476774100601306",
+      "as_of_ts": 1783086674
+    },
+    {
+      "token_id": "52071265190952522689479543709301548413026004383513104673987842936567245547890",
+      "qty": "805.012291",
+      "wac_cost": "0.03990845277665456166308397396",
+      "as_of_ts": 1783086380
+    },
+    {
+      "token_id": "53975539648480156710618958341377249497415796246629917739929698724645515885275",
+      "qty": "203.745159",
+      "wac_cost": "0.3800000028466934029092686320",
+      "as_of_ts": 1783087333
+    },
+    {
+      "token_id": "58350915364709051793846814640580931021442271559390171004801856770615353758606",
+      "qty": "150.834066",
+      "wac_cost": "0.1301371932783407164797904473",
+      "as_of_ts": 1783086448
+    },
+    {
+      "token_id": "62818358496282533529954296359494473895566816977533851302554203551466099324756",
+      "qty": "295",
+      "wac_cost": "0.022",
+      "as_of_ts": 1783080071
+    },
+    {
+      "token_id": "62873783374679799169768055702852169196205838314467917141125195472793364503138",
+      "qty": "74.641235",
+      "wac_cost": "0.07020640802634093607909890558",
+      "as_of_ts": 1783080419
+    },
+    {
+      "token_id": "63056428080554530793260838999364000218977080668544078601433808948466985370309",
+      "qty": "443.817201",
+      "wac_cost": "0.6823016375158474310688106926",
+      "as_of_ts": 1783082816
+    },
+    {
+      "token_id": "63753045320004168940932633858552737853398289667092107882286202224791004761500",
+      "qty": "9530",
+      "wac_cost": "0.4847534102833158447009443861",
+      "as_of_ts": 1783082791
+    },
+    {
+      "token_id": "65340279092986715108422056084103758924818660760802305107014741354115174923173",
+      "qty": "17469.000980",
+      "wac_cost": "0.1184533251998249072168750889",
+      "as_of_ts": 1783083023
+    },
+    {
+      "token_id": "66355494578652951731364974690046586813209193017195240207191243096586962431362",
+      "qty": "223.8",
+      "wac_cost": "0.09707417336907953529937444147",
+      "as_of_ts": 1783086271
+    },
+    {
+      "token_id": "66989565725018295329731015490601280578387414531640873118026174605972121014721",
+      "qty": "62.812047",
+      "wac_cost": "0.04515576446664761618101699504",
+      "as_of_ts": 1783082164
+    },
+    {
+      "token_id": "6804492417565006548826787901974541722987551605608409603930377061174930053011",
+      "qty": "1390.845352",
+      "wac_cost": "0.7897627888107577326109509837",
+      "as_of_ts": 1783087246
+    },
+    {
+      "token_id": "69202115380914706115050977016501501910973028665015669459341615326201813525886",
+      "qty": "25",
+      "wac_cost": "0.95920679999999992",
+      "as_of_ts": 1783085533
+    },
+    {
+      "token_id": "71198885594071881468556117428708104787043010350430474389456768226528529364408",
+      "qty": "1940.08",
+      "wac_cost": "0.6045796462001566945692961115",
+      "as_of_ts": 1783086634
+    },
+    {
+      "token_id": "71492006638761609673196891690117232837510126366557745201679692333764909293169",
+      "qty": "6285.172411",
+      "wac_cost": "0.4649741044311345940578367374",
+      "as_of_ts": 1783082863
+    },
+    {
+      "token_id": "71622744338194363935545383011816736921725502674710770202364504084435837514363",
+      "qty": "526.285571",
+      "wac_cost": "0.5592768132341595205922907584",
+      "as_of_ts": 1783085765
+    },
+    {
+      "token_id": "77227730156570943434093925466207071088964548843583759108443248628079237174217",
+      "qty": "1437",
+      "wac_cost": "0.57",
+      "as_of_ts": 1783086020
+    },
+    {
+      "token_id": "78691406023893899399279301318747020411842800286547125166065771258798140046023",
+      "qty": "62.181369",
+      "wac_cost": "0.1076877223465440267164269092",
+      "as_of_ts": 1783087282
+    },
+    {
+      "token_id": "8034291054833407441050552604585648759190219156987232079377261105843916626085",
+      "qty": "34739.526563",
+      "wac_cost": "0.3916313626015375930959545932",
+      "as_of_ts": 1783087330
+    },
+    {
+      "token_id": "80520074027832600521615259113424135408047177605936735542906762807363269034307",
+      "qty": "25.65",
+      "wac_cost": "0.961",
+      "as_of_ts": 1783080079
+    },
+    {
+      "token_id": "82896381792679017997042114220164301867744450013995540061013800389890521612825",
+      "qty": "10000",
+      "wac_cost": "0.455",
+      "as_of_ts": 1783084807
+    },
+    {
+      "token_id": "85721084204759156709112242773922849473748639213256779319893844956100753341315",
+      "qty": "4232.173075",
+      "wac_cost": "0.9350000002067495786428819431",
+      "as_of_ts": 1783085593
+    },
+    {
+      "token_id": "86161074133061949856693796448875976681614293168594437301198019977264575355402",
+      "qty": "5",
+      "wac_cost": "0.1",
+      "as_of_ts": 1783082480
+    },
+    {
+      "token_id": "86176986919046949168732066625208699712357096914523609486707940988099283313798",
+      "qty": "110.102",
+      "wac_cost": "0.02",
+      "as_of_ts": 1783086122
+    },
+    {
+      "token_id": "87074365151755591578993993825578542885146063033989292137619716310007883233270",
+      "qty": "165.565861",
+      "wac_cost": "0.7196584022837896515393351532",
+      "as_of_ts": 1783085230
+    },
+    {
+      "token_id": "89731306442841399807673117654119674551409279842548285818042138155684696108251",
+      "qty": "2534.080428",
+      "wac_cost": "0.6226897992521017174282046900",
+      "as_of_ts": 1783087244
+    },
+    {
+      "token_id": "92731777370963588296838506098098436862894781049327592274749822147666958762428",
+      "qty": "942.00",
+      "wac_cost": "0.6733757961783439490445859873",
+      "as_of_ts": 1783081811
+    },
+    {
+      "token_id": "94989578439811454809281447646781651261110751430238980450230470856884605283009",
+      "qty": "6038.017518",
+      "wac_cost": "0.3574036876452798658475174036",
+      "as_of_ts": 1783086064
+    },
+    {
+      "token_id": "98397768932812877408445064509947916522642700748707687738288772143338111453586",
+      "qty": "2372.6",
+      "wac_cost": "0.08",
+      "as_of_ts": 1783082650
+    },
+    {
+      "token_id": "99475467031165949578573717080311653536631706411254214748294450401738679657352",
+      "qty": "32140.051707",
+      "wac_cost": "0.6727332309888869090735716407",
+      "as_of_ts": 1783087114
+    }
+  ],
+  "undocumented_events": [
+    {
+      "id": 3402981,
+      "event_type": "CONVERSION",
+      "ts": 1767001445,
+      "condition_id": "0x84287af30216cb38355948330f61733e1aa82abc08a538094aab4dc4b005f300",
+      "usdc_size": "10",
+      "tx_hash": "0x6ebccda51506730933b60ba505141d584b3cac2604f430f3ceafcb005674f28d",
+      "raw_ref": 8840
+    }
+  ]
+}
