@@ -211,6 +211,41 @@ def test_overlapping_raw_fetches_dedupe_at_ledger_level(settings, session):
     assert count == 7
 
 
+def test_multiple_legitimate_fills_in_same_transaction_are_preserved(settings, session):
+    raw_store = RawStore(settings, session)
+    fill_a = {
+        **GOLDEN_ROWS[0],
+        "transactionHash": "0xmulti",
+        "size": 10.0,
+        "usdcSize": 4.0,
+        "price": 0.4,
+    }
+    fill_b = {
+        **GOLDEN_ROWS[0],
+        "transactionHash": "0xmulti",
+        "size": 12.0,
+        "usdcSize": 6.0,
+        "price": 0.5,
+    }
+    _seed(raw_store, GOLDEN_WALLET, [fill_a, fill_b])
+
+    stats = run_ingest(session, wallet=GOLDEN_WALLET)
+
+    assert stats.events_seen == 2
+    assert stats.events_inserted == 2
+    rows = session.execute(
+        text(
+            "SELECT tx_hash, token_id, delta_shares, delta_usdc, price "
+            "FROM wallet_events WHERE wallet = :w ORDER BY price"
+        ),
+        {"w": GOLDEN_WALLET},
+    ).fetchall()
+    assert len(rows) == 2
+    assert {row.tx_hash for row in rows} == {"0xmulti"}
+    assert {Decimal(row.delta_shares) for row in rows} == {Decimal("10.0"), Decimal("12.0")}
+    assert {Decimal(row.delta_usdc) for row in rows} == {Decimal("-4.0"), Decimal("-6.0")}
+
+
 def test_reparse_is_row_for_row_identical(settings, session):
     raw_store = RawStore(settings, session)
     _seed(raw_store, GOLDEN_WALLET, GOLDEN_ROWS)

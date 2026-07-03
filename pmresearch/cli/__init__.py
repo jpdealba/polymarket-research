@@ -12,6 +12,7 @@ from ..config import ensure_data_dirs, get_settings
 from ..db.migrations import current_revision, upgrade_to_head
 from ..logging_setup import setup_logging
 from .ingest import ingest_group, ledger_group
+from .markets import markets_group
 from .sync import sync_group
 from .wallets import wallet_group
 
@@ -25,6 +26,7 @@ main.add_command(wallet_group)
 main.add_command(sync_group)
 main.add_command(ingest_group)
 main.add_command(ledger_group)
+main.add_command(markets_group)
 
 
 @main.command()

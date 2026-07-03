@@ -98,6 +98,21 @@ Conventions used below:
 
 ## Phase 2 — Ingest raw activity into the append-only wallet_events ledger
 
+**Implementation checklist:**
+
+- [x] `wallet_events` migration and indexes.
+- [x] `raw_fetches.ingested_at` tracking.
+- [x] Deterministic activity parser with signed deltas for TRADE, MERGE, SPLIT, REDEEM, REWARD, MAKER_REBATE, TAKER_REBATE.
+- [x] Unknown activity types are preserved and logged.
+- [x] Composite dedupe key uses stable fields beyond `transactionHash`.
+- [x] Idempotent ingest and wallet reparse.
+- [x] Ledger stats CLI.
+- [x] Golden ingest, overlap, idempotency, reparse, progress-commit, and sign-convention tests.
+- [x] Explicit regression test: multiple legitimate fills in one transaction are preserved.
+- [ ] Manual RN1 spot-check against Polymarket UI/raw JSON when live RN1 data is refreshed locally.
+- ~~Projection/replay logic~~ — belongs to Phase 4.
+- ~~Market metadata sync~~ — belongs to Phase 3.
+
 **Goal:** deterministic, idempotent parsing of Raw Store payloads into the immutable ledger.
 
 **Scope:** ingest pipeline raw_fetches → `wallet_events`; dedupe keys; event typing (TRADE, MERGE, SPLIT, REDEEM, REWARD, TRANSFER, unknown-preserving); signed delta conventions; re-parse capability. No projections yet.
@@ -120,8 +135,8 @@ Conventions used below:
 **Acceptance criteria:** full RN1 raw history ingested; idempotency proven (second run inserts 0); every ledger row traces to a raw_ref; unknown event types preserved, logged, and counted, not dropped.
 
 **Common failure modes:** float precision drift making dedupe_keys unstable (normalize numbers to fixed-precision strings before hashing); window-overlap duplicates surviving because of field ordering differences (canonicalize field order in the key); silently dropping rows that fail validation (must go to a logged reject count with raw_ref).  
-  
-Important note:   
+
+Important note:  
 Important deduplication requirement: 
 
 Do not deduplicate only by transactionHash or transactionHash + asset.
@@ -142,6 +157,23 @@ If uniqueness is ambiguous, preserve the events and let reconciliation catch iss
 
 ## Phase 3 — Gamma metadata: markets, tokens, events, structure descriptors
 
+**Implementation checklist:**
+
+- [x] `m0004` migration for `markets`, `tokens`, and `pm_events`.
+- [x] Gamma `/markets` adapter by batched `condition_ids`.
+- [x] Raw Store persistence for Gamma responses before parsing/upsert.
+- [x] Mutable dimension upsert for markets, tokens, and embedded events.
+- [x] Defensive parsing for stringified `outcomes`, `clobTokenIds`, and `outcomePrices`.
+- [x] Label-agnostic Market Structure Descriptor.
+- [x] Resolution price parsing into per-token terminal values.
+- [x] `pmr markets sync` and `pmr markets stats`.
+- [x] Hourly scheduler jobs for `markets_refresh` and `resolution_sweep`.
+- [x] Tests for binary, negRisk event member, team-name outcomes, resolution parsing, idempotent upsert, Raw Store persistence, and missing-market detection.
+- [ ] Manual RN1 `pmr markets sync`/`pmr markets stats` verification after local RN1 ledger data is available/current.
+- ~~Outcome-label based structure inference~~ — explicitly disallowed.
+- ~~Fee attribution / gross-vs-net PnL~~ — moved to Phase 3.5.
+- ~~Holdings/open-position market refresh~~ — the open-holdings side depends on Phase 4 holdings.
+
 **Goal:** every conditionId in the ledger resolves to a market row with tokens, event membership, resolution data, and a Market Structure Descriptor.
 
 **Scope:** Gamma adapter (markets by condition_ids, batched; events); dimension tables; descriptor derivation (binary / negRisk-event-member / unclassified — by `clobTokenIds` count and flags, never outcome labels per CONTEXT.md); hourly refresh job for touched markets; resolution sweep job.
@@ -160,13 +192,85 @@ If uniqueness is ambiguous, preserve the events and let reconciliation catch iss
 
 **Common failure modes:** Gamma returning stringified JSON fields (`outcomes`, `clobTokenIds` are JSON *strings* — verified) — parse defensively; condition_ids batching limits (chunk requests); markets deleted/renamed upstream (keep last-known row, log staleness); assuming outcome index order matches clobTokenIds order without asserting it.
 
-**Fee-attribution note (do not lose):** after Phase 3 metadata exists, add an explicit fee-attribution subphase before relying on category-level PnL claims. The current backfill/ingest only records Data-API cash flows and rebates as reported; it does **not** explicitly model fee schedules by market category/date. For RN1 analysis we need a small `fee_schedule`/rules layer keyed by effective date and category (notably sports fee regime starting 2026-03-30), then classify trades by Gamma category and compute estimated fees/gross-vs-net PnL. Phase 11 on-chain enrichment may provide actual per-fill `fee`; when available, actual fee should override any schedule estimate.
-
 **Prompt:** `Implement Phase 3 of IMPLEMENTATION_PLAN.md exactly as scoped. Descriptors must be label-agnostic (token index, never outcome strings). Run tests, then manual verification on RN1's markets and show markets stats including unclassified count. Commit when acceptance criteria pass.`
 
 ---
 
 
+
+## Phase 3.5 — Fee attribution and gross-vs-net PnL reporting
+
+REVISAR: investigar y revisar si es necesario esto o ya viene incluido en los datos
+
+En dado caso:  
+No modificar wallet_events.  
+No restar fees al PnL base.  
+Calcular estimated_fee como dato explicativo.
+
+**Goal:** estimate and later reconcile trading fees by market category/date so RN1 category-level and post-fee analyses do not confuse gross edge, net edge, rewards, and fees.
+
+**Scope:** reporting/analytics only. Do not change `wallet_events`. Use Phase 3 Gamma metadata to classify each fill by market category and date. Add a fee schedule/rules layer keyed by effective date and category, especially the sports fee regime starting 2026-03-30. Compute estimated fees and gross-vs-net PnL views. When Phase 11 on-chain enrichment provides actual per-fill fees, actual fees override schedule estimates.
+
+**Files/modules:**
+
+- `pmresearch/fees/schedules.py` — versioned fee rules by category/effective date.
+- `pmresearch/fees/estimate.py` — estimate fee per TRADE event using market category, timestamp, side, price, size/usdc_size.
+- `pmresearch/reports/fee_attribution.py` — gross-vs-net summaries by wallet, period, category.
+- `pmresearch/cli/fees.py`
+
+**Migrations:**
+
+- `fee_schedules` — id, category, effective_from_ts, effective_to_ts nullable, rule_name, params_json, source, notes.
+- `fee_estimates` — event_id FK UNIQUE, wallet, condition_id, token_id, category, ts, estimated_fee, fee_currency, rule_name, confidence, computed_at.
+- Optional later: `actual_fees` from Phase 11 enrichment, or reuse `fill_enrichment.fee` as the actual fee source.
+
+**CLI:**
+
+- `pmr fees compute [--wallet]`
+- `pmr fees report --wallet <addr> [--by-category] [--pre-post-sports-fee]`
+
+**Tests:**
+
+- Sports trade before 2026-03-30 gets zero/old-rule fee.
+- Sports trade after 2026-03-30 gets sports fee estimate.
+- Non-sports category does not accidentally receive sports fee.
+- Actual fee from enrichment overrides estimated fee when present.
+- Gross-vs-net report sums consistently.
+
+**Manual verification:**
+
+- Run fee attribution for RN1.
+- Show pre/post sports-fee periods:
+  - BUY volume
+  - estimated fees
+  - rewards/rebates
+  - trading PnL
+  - all-in PnL
+  - ROI on BUY volume
+- Confirm post-fee ROI uses net cashflow data and displays estimated fee impact separately.
+
+**Acceptance criteria:**
+
+- Fee estimates are clearly labeled as estimates until Phase 11 actual fee enrichment exists.
+- `wallet_events` remains unchanged.
+- Category/date fee logic is versioned and reproducible.
+- Reports separate:
+  - trading PnL
+  - all-in PnL
+  - rewards/rebates
+  - estimated fees
+  - actual fees when available
+- No category-level RN1 conclusion is treated as final until fee attribution exists.
+
+**Common failure modes:**
+
+- Double-counting fees already reflected in Data-API cashflows.
+- Treating estimated fees as actual fees.
+- Applying sports fees to non-sports markets.
+- Ignoring effective dates.
+- Mixing rewards/rebates with trading PnL.
+
+---
 
 ## Phase 4 — Ledger replay: current token holdings
 
@@ -558,4 +662,3 @@ Then:
 3. Confirm the acceptance criteria checklist for Phase 0 one by one.
 4. Commit with a clear message and push.
 ```
-
