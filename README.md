@@ -1,5 +1,9 @@
 # polymarket-research
 
+.\.venv\Scripts\pmr ledger stats --wallet $WALLET
+.\.venv\Scripts\pmr pnl show --wallet $WALLET --by-category
+.\.venv\Scripts\pmr equity show --wallet $WALLET --limit 5
+
 Quantitative research platform for analyzing successful Polymarket wallets — understanding *why* certain wallets are profitable, and eventually discovering automatable strategies.
 
 **Status:** design complete, pre-implementation.
