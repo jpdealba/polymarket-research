@@ -1,0 +1,6 @@
+wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea
+episodes=159009 open=12450 flat=25597 resolution=120962
+duration_seconds=min=5 p50=24188.0 p90=1000243.0 max=18060679
+micro_episodes=266 micro_episode_share=0.001814968715670821989778860391
+realized_pnl=4162420.331190884829274074131 reward_income=0
+Note: resolution-closed episode PnL is understated until Phase 8 derives redemption proceeds.

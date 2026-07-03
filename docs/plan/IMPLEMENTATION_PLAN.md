@@ -635,10 +635,6 @@ Calcular estimated_fee como dato explicativo.
 **Prompt:** `Implement Phase 17 of IMPLEMENTATION_PLAN.md exactly as scoped. Run the real restore drill and capture logs, wire staleness alerts, implement pmr acceptance, and start the 7-day soak. At the end of the soak, produce docs/MVP_ACCEPTANCE.md with evidence for all seven ADR 0006 points. Commit when acceptance criteria pass.`
 
 ---
-Phase 18 — Strategy Fingerprints
-Phase 19 — Signal Reconstruction
-Phase 20 — Replication Candidates
-
 
 ## Phase ordering rationale
 
