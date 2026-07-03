@@ -116,6 +116,16 @@ The current-open-episode WAC model is validated against oracle avgPrice for RN1.
 
 ## Phase 8 — Derived redemption PnL and PnL decomposition
 
+Phase 8 produced two useful PnL views:
+
+1. UI-style cashflow PnL: ~$10.74M
+   This is closest to Polymarket UI/leaderboard because it sums net USDC cashflows plus derived zero-redemption payouts.
+
+2. WAC/accounting decomposition PnL: ~$13.03M
+   This is more useful for strategy analysis because it separates directional PnL, bond/merge PnL, reward income, and redemption PnL using cost-basis accounting.
+
+The ~$2.29M difference is explained by WAC/accounting treatment vs raw cashflow treatment, not by a detected data error.
+
 ### What we validated
 
 We derived idempotent `REDEEM_PAYOUT` events for zero-valued API REDEEM rows and updated episodes so resolution-close PnL includes derived payouts.
