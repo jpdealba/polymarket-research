@@ -54,9 +54,29 @@ class SourceAdapter:
     def get_json(
         self, path: str, params: httpx.QueryParamTypes
     ) -> tuple[httpx.Response, object]:
+        return self._request_json("GET", path, params=params)
+
+    def post_json(
+        self, path: str, json_body: object
+    ) -> tuple[httpx.Response, object]:
+        """POST a JSON body with the same retry/backoff as get_json. Used by
+        the GraphQL subgraph adapter (a GraphQL request is a POST)."""
+        return self._request_json("POST", path, json_body=json_body)
+
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: httpx.QueryParamTypes | None = None,
+        json_body: object = None,
+    ) -> tuple[httpx.Response, object]:
         attempt = 0
         while True:
-            response = self._client.get(path, params=params)
+            if method == "POST":
+                response = self._client.post(path, json=json_body)
+            else:
+                response = self._client.get(path, params=params)
             if response.status_code == 429 or response.status_code >= 500:
                 attempt += 1
                 if attempt > self.retry.max_retries:

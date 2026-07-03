@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 INCREMENTAL_INTERVAL_MINUTES = 5
 MARKETS_REFRESH_INTERVAL_MINUTES = 60
+ENRICHMENT_INTERVAL_HOURS = 24
 
 
 def _fetch_and_upsert_markets(
@@ -198,6 +199,37 @@ def run_resolution_sweep_cycle(settings: Settings) -> None:
         session.close()
 
 
+def run_enrichment_cycle(settings: Settings) -> None:
+    """Daily maker/taker enrichment from the subgraph. No-ops cleanly when
+    PMR_SUBGRAPH_URL is unset (subgraph is the only scheduled source; RPC stays
+    CLI-driven). Isolated and exception-guarded like the other cycles."""
+    if not settings.subgraph_url:
+        logger.info("Enrichment cycle skipped: PMR_SUBGRAPH_URL not configured.")
+        return
+
+    from ..ingest.enrichment import run_enrichment
+
+    session = get_session_factory(settings)()
+    try:
+        wallets = [row.address for row in manager.list_wallets(session)]
+        for address in wallets:
+            try:
+                stats = run_enrichment(session, settings, address, source="subgraph")
+                logger.info(
+                    "Enrichment %s: fills=%d enriched=%d ambiguous=%d unmatched=%d",
+                    address,
+                    stats.fills_seen,
+                    stats.enriched,
+                    stats.ambiguous,
+                    stats.unmatched,
+                )
+            except Exception:
+                logger.exception("Enrichment failed for %s", address)
+                continue
+    finally:
+        session.close()
+
+
 def build_scheduler(settings: Settings) -> BlockingScheduler:
     scheduler = BlockingScheduler()
     scheduler.add_job(
@@ -225,6 +257,15 @@ def build_scheduler(settings: Settings) -> BlockingScheduler:
         minutes=MARKETS_REFRESH_INTERVAL_MINUTES,
         args=[settings],
         id="resolution_sweep",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        run_enrichment_cycle,
+        "interval",
+        hours=ENRICHMENT_INTERVAL_HOURS,
+        args=[settings],
+        id="enrichment",
         max_instances=1,
         coalesce=True,
     )

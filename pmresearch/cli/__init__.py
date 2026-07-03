@@ -11,6 +11,7 @@ from ..backup import create_backup, restore_backup
 from ..config import ensure_data_dirs, get_settings
 from ..db.migrations import current_revision, upgrade_to_head
 from ..logging_setup import setup_logging
+from .enrich import enrich_group
 from .episodes import episodes_group, replay_episodes
 from .equity import equity_group
 from .exposure import exposure_group
@@ -44,6 +45,7 @@ main.add_command(derive_group)
 main.add_command(pnl_group)
 main.add_command(equity_group)
 main.add_command(exposure_group)
+main.add_command(enrich_group)
 replay_group.add_command(replay_episodes)
 
 

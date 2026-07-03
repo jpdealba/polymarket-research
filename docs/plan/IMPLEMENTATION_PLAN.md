@@ -478,7 +478,7 @@ Calcular estimated_fee como dato explicativo.
 
 **Files/modules:** `pmresearch/sources/subgraph.py`; `pmresearch/sources/rpc.py` (event decoding: maker/taker/assetIds/amounts/fee; makerAssetId=0 ⇒ maker paid USDC — verified convention); `pmresearch/ingest/enrichment.py` (match + insert; unmatched enrichment rows logged, never force-matched); `pmresearch/cli/enrich.py`.
 
-**Migrations:** `m0011`: `fill_enrichment` (event_id FK UNIQUE, role maker/taker, order_hash, fee, counterparty nullable, source subgraph/rpc, enriched_at) · `enrichment_watermarks` (wallet, subgraph_synced_to_ts, rpc_synced_to_block).
+**Migrations:** `m0012`: `fill_enrichment` (event_id FK UNIQUE, role maker/taker, order_hash, fee, counterparty nullable, source subgraph/rpc, enriched_at) · `enrichment_watermarks` (wallet, subgraph_synced_to_ts, rpc_synced_to_block). (Phase 10 already took `m0011`.)
 
 **CLI:** `pmr enrich run [--wallet] [--source subgraph|rpc]` · `pmr enrich coverage [--wallet]` (share of TRADE events enriched, by recency bucket).
 
@@ -489,6 +489,22 @@ Calcular estimated_fee como dato explicativo.
 **Acceptance criteria:** enrichment never creates/deletes ledger events; coverage metric distinguishes enriched/pending/ambiguous; RN1 maker-share computable for the subgraph-covered period; RPC path optional and config-gated; all payloads raw-stored.
 
 **Common failure modes:** joining by tx_hash alone (one tx contains many fills — must use wallet+asset+amount); size unit mismatch (subgraph amounts are 6-decimals integers; ledger uses decimal shares); proxy wallet vs signer address mismatch in subgraph maker/taker fields (verify with RN1 known fills; document which address space the subgraph uses); Goldsky endpoint throttling (backoff, cursor pagination by timestamp+id, not offset).
+
+**Implementation checklist:**
+
+- [x] Migration `m0012`: `fill_enrichment` (event_id FK UNIQUE) + `enrichment_watermarks`.
+- [x] Config `subgraph_url` (`PMR_SUBGRAPH_URL`, empty default); `rpc_url` already gates RPC OFF.
+- [x] `sources/subgraph.py`: Goldsky `orderFilledEvents` adapter, (timestamp, id) cursor pagination (not offset), each page raw-stored before parsing, 6-decimal→shares helper, `makerAssetId==0 ⇒ maker paid USDC` convention.
+- [x] `sources/rpc.py`: pure `decode_order_filled` (keccak topic0 + ABI word decode) for both directions; both exchange contracts; raw-stored; gated behind `rpc_url`.
+- [x] `ingest/enrichment.py`: join by (tx_hash, wallet, asset, amount); ambiguous candidates left unenriched + logged; idempotent `ON CONFLICT(event_id) DO NOTHING`; watermarks updated; never mutates the ledger.
+- [x] `cli/enrich.py`: `pmr enrich run [--wallet] [--source subgraph|rpc]` and `pmr enrich coverage [--wallet]` (enriched/pending/ambiguous/missing by recency bucket); wired into `cli/__init__.py`.
+- [x] Daily `enrichment` scheduler job, no-op when `subgraph_url` unset, exception-guarded.
+- [x] Tests: OrderFilled decode both directions; multi-fill match by amount; ambiguous left unenriched + counter; idempotency; lag awareness (pending vs missing); subgraph-only end to end (RPC disabled); 6-decimal→shares conversion.
+- [ ] Manual RN1 walkthrough (`pmr enrich run`/`coverage`, one hand-verified fill, proxy-vs-signer address confirmation) — deferred, no live data available.
+
+Address-space decision: the subgraph `maker`/`taker` (and the RPC `OrderFilled` indexed maker/taker) are the on-chain exchange order signer/filler addresses; enrichment lower-cases and matches ledger `wallet` against them directly. Whether Polymarket's proxy wallet vs the signer address appears here must be confirmed against a known RN1 fill once live data exists (deferred).
+
+Amount-conversion approach: on-chain amounts are 6-decimal fixed-point integers; `to_shares(x) = Decimal(x) / 10**6`. The traded outcome-token quantity is the non-USDC side per the `makerAssetId==0` convention, compared to `abs(delta_shares)` with a `1e-6` tolerance.
 
 **Prompt:** `Implement Phase 11 of IMPLEMENTATION_PLAN.md exactly as scoped. Enrichment joins by tx_hash+wallet+asset+amount, never tx_hash alone; ambiguous matches stay unenriched and logged. RPC is optional via config. Show me RN1 enrichment coverage by recency bucket and one hand-verified enriched fill. Commit when acceptance criteria pass.`
 

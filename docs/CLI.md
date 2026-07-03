@@ -14,7 +14,8 @@ Todos los comandos aceptan `--help` para ver la ayuda integrada.
 | --- | --- | --- |
 | `PMR_DATA_DIR` | `/data` | Directorio raiz de datos persistentes: `db/`, `raw/`, `backups/`, `exports/`, `logs/`. |
 | `PMR_LOG_LEVEL` | `INFO` | Nivel de logging. |
-| `PMR_RPC_URL` | vacio | URL RPC disponible para componentes que la requieran. |
+| `PMR_RPC_URL` | vacio | URL JSON-RPC de Polygon para el enriquecimiento por RPC (Fase 11, `eth_getLogs` de `OrderFilled`). Vacio = RPC apagado; el enriquecimiento por subgraph funciona igual. |
+| `PMR_SUBGRAPH_URL` | vacio | Endpoint del subgraph de orderbook de Goldsky (Fase 11). Vacio = subgraph no configurado; `pmr enrich run` da error claro y el job diario de enrichment hace no-op. |
 | `PMR_RCLONE_REMOTE` | vacio | Remote de rclone para operaciones externas de backup/sync. |
 | `PMR_DUST_EPSILON` | `0.000001` | Umbral de "dust": holdings con cantidad absoluta menor o igual se consideran planos (flat). |
 
@@ -54,6 +55,8 @@ Todos los comandos aceptan `--help` para ver la ayuda integrada.
 | `pmr equity show` | `--wallet TEXT`: requerido; `--limit INT`: filas finales a mostrar, default `10` | Muestra resumen y ultimas filas de la curva diaria de equity. Incluye la caveat de que el drawdown es daily-close based e intradia aproximado. |
 | `pmr exposure build` | `--wallet TEXT`: limita a una wallet; sin flag usa wallets activas de watchlist o, si no hay, todas las del ledger | Construye las proyecciones `exposures_daily` (exposicion market-level directional+bond o vector unclassified por wallet x condition x dia UTC) y `event_exposures_daily` (vector de exposicion por condition + neteo `net_after_exclusivity` para eventos negRisk). Despacha solo por `structure_type`; estructuras desconocidas van al camino unclassified con warning contado. Imprime progreso durante el replay y hace flush/commit por batches. |
 | `pmr exposure show` | `--wallet TEXT`: requerido; `--market TEXT`: filtra por `condition_id`; `--event TEXT`: filtra por `event_id`; `--limit INT`: filas finales a mostrar, default `10` | Muestra filas de exposicion. Sin `--event` muestra market-level (structure_type, directional, bond, event_id); con `--event` muestra el vector de exposicion del evento y su neteo. `--market` y `--event` no se pueden combinar. |
+| `pmr enrich run` | `--wallet TEXT`: limita a una wallet; sin flag usa wallets activas de watchlist o, si no hay, todas las del ledger; `--source [subgraph\|rpc]`: fuente, default `subgraph` (rpc solo si `PMR_RPC_URL` esta configurado, error claro si no); `--from-block INT`/`--to-block INT`: rango de bloques para `--source rpc` (`--to-block` requerido en ese modo) | Trae fills `OrderFilled` (subgraph de Goldsky o RPC) y los une a los eventos TRADE del ledger por (tx_hash, wallet, token, monto) — nunca por tx_hash solo. Convierte montos enteros de 6 decimales a shares para comparar contra `delta_shares`. Inserta en `fill_enrichment` de forma idempotente (`ON CONFLICT(event_id) DO NOTHING`), con role maker/taker, order_hash, fee (string decimal) y counterparty; deja sin enriquecer y loguea los casos ambiguos (varios candidatos con mismo monto). Nunca crea ni borra eventos del ledger; actualiza `enrichment_watermarks`. |
+| `pmr enrich coverage` | `--wallet TEXT`: limita a una wallet; sin flag usa wallets activas o del ledger | Muestra la cobertura de enrichment sobre los eventos TRADE, por bucket de recencia, distinguiendo enriched / pending (mas reciente que el head del subgraph — aun no reportado, no faltante) / ambiguous (gemelos con mismo tx+token+monto) / missing (viejo y sin enriquecer). Reporta tambien el `subgraph_head_ts`. |
 | `pmr reconcile run` | `--wallet TEXT`: requerido; `--json`: salida JSON estable | Ejecuta reconciliacion contra Data API: raw-storea `/positions`, compara `positions.size` contra `holdings.qty`, revisa WAC/realizedPnl cuando el oracle trae esos campos, agrega chequeo de portfolio value contra `/value` usando la ultima fila de `daily_equity`, persiste facts por batches y actualiza `wallet_trust`. En salida humana imprime progreso; con `--json` no imprime progreso para mantener JSON estable. |
 | `pmr reconcile status` | `--wallet TEXT`: opcional | Muestra la ultima reconciliacion por wallet: conteos, trust, excepciones conocidas, top discrepancias por cantidad/notional, negativos, holdings sin metadata presentes en `/positions`, discrepancias WAC/realizedPnl y resultado de `/value`. |
 | `pmr trust status` | `--wallet TEXT`: opcional | Muestra el estado derivado de confianza de cada wallet (`trusted`, `warn`, `untrusted`) y la razon de la ultima reconciliacion. |
@@ -78,6 +81,8 @@ pmr equity build --wallet 0x...
 pmr equity show --wallet 0x...
 pmr exposure build --wallet 0x...
 pmr exposure show --wallet 0x... --event <event_id>
+pmr enrich run --wallet 0x...
+pmr enrich coverage --wallet 0x...
 pmr reconcile run --wallet 0x...
 pmr reconcile status
 pmr trust status
