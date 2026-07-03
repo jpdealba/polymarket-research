@@ -5,8 +5,14 @@ from click.testing import CliRunner
 from sqlalchemy import text
 
 from pmresearch.cli import main
+from pmresearch.projections.episodes import rebuild_episodes
 from pmresearch.projections.holdings import rebuild_holdings
-from pmresearch.reconcile.checks import RECONCILE_TOLERANCE, build_reconciliation_result
+from pmresearch.reconcile.checks import (
+    REALIZED_PNL_TOLERANCE,
+    RECONCILE_TOLERANCE,
+    WAC_TOLERANCE,
+    build_reconciliation_result,
+)
 from pmresearch.reconcile.runner import run_reconciliation
 from pmresearch.sources.dataapi import PositionRow, PositionsFetchIncomplete
 
@@ -28,6 +34,30 @@ def _position(token_id, size, *, condition_id="0xc1", price="0.5", value=None):
         title="Question",
         outcome="Yes",
         raw={},
+    )
+
+
+def _oracle_position(
+    token_id,
+    size,
+    *,
+    avg_price,
+    realized_pnl="0",
+    condition_id="0xc1",
+    price="0.5",
+    value=None,
+):
+    return PositionRow(
+        token_id=token_id,
+        size=Decimal(str(size)),
+        avg_price=Decimal(str(avg_price)),
+        cur_price=Decimal(str(price)),
+        current_value=Decimal(str(value if value is not None else size)),
+        condition_id=condition_id,
+        title="Question",
+        outcome="Yes",
+        raw={"avgPrice": str(avg_price), "realizedPnl": str(realized_pnl)},
+        realized_pnl=Decimal(str(realized_pnl)),
     )
 
 
@@ -92,6 +122,10 @@ def _size_facts(result):
     return [fact for fact in result.facts if fact.check_type == "positions_size"]
 
 
+def _facts(result, check_type):
+    return [fact for fact in result.facts if fact.check_type == check_type]
+
+
 def test_exact_local_remote_match_passes_and_trusts_wallet(settings, session):
     _insert_holding(session, "tok1", "10")
 
@@ -113,6 +147,221 @@ def test_epsilon_level_dust_passes(settings, session):
     assert fact.abs_diff <= RECONCILE_TOLERANCE
     assert fact.reason_code == "dust_only"
     assert fact.status == "pass"
+    assert trust.status == "trusted"
+
+
+def test_wac_avgprice_matches_current_open_episode_not_lifetime(settings, session):
+    wallet = "0xwacopen"
+    _seed_conditions(session, {"0xc1": ["tok_wac", "tok_other"]})
+    _seed_ledger(
+        session,
+        wallet,
+        [
+            {
+                "type": "TRADE",
+                "ts": 100,
+                "condition_id": "0xc1",
+                "token_id": "tok_wac",
+                "delta_shares": "10",
+                "delta_usdc": "-2",
+            },
+            {
+                "type": "TRADE",
+                "ts": 200,
+                "condition_id": "0xc1",
+                "token_id": "tok_wac",
+                "delta_shares": "-10",
+                "delta_usdc": "3",
+            },
+            {
+                "type": "TRADE",
+                "ts": 300,
+                "condition_id": "0xc1",
+                "token_id": "tok_wac",
+                "delta_shares": "5",
+                "delta_usdc": "-4",
+            },
+        ],
+    )
+    rebuild_holdings(session, wallet, dust_epsilon=settings.dust_epsilon)
+    rebuild_episodes(session, wallet, dust_epsilon=settings.dust_epsilon)
+
+    result, trust = _run(
+        session,
+        settings,
+        [_oracle_position("tok_wac", "5", avg_price="0.8", realized_pnl="0")],
+        wallet=wallet,
+    )
+
+    wac_fact = _facts(result, "positions_wac_avg_price")[0]
+    assert wac_fact.computed == Decimal("0.8")
+    assert wac_fact.expected == Decimal("0.8")
+    assert wac_fact.status == "pass"
+    assert wac_fact.notes["comparison_scope"] == "current_open_episode"
+    assert wac_fact.notes["open_episode_ts"] == 300
+    assert trust.status == "trusted"
+
+
+def test_wac_avgprice_drift_fails_without_widening_tolerance(settings, session):
+    wallet = "0xwacbug"
+    _seed_conditions(session, {"0xc1": ["tok_bug", "tok_other"]})
+    _seed_ledger(
+        session,
+        wallet,
+        [
+            {
+                "type": "TRADE",
+                "ts": 100,
+                "condition_id": "0xc1",
+                "token_id": "tok_bug",
+                "delta_shares": "10",
+                "delta_usdc": "-5",
+            }
+        ],
+    )
+    rebuild_holdings(session, wallet, dust_epsilon=settings.dust_epsilon)
+    rebuild_episodes(session, wallet, dust_epsilon=settings.dust_epsilon)
+    session.execute(
+        text("UPDATE episodes SET wac_entry = '0.7' WHERE wallet = :w AND token_id = 'tok_bug'"),
+        {"w": wallet},
+    )
+    session.commit()
+
+    result, trust = _run(
+        session,
+        settings,
+        [_oracle_position("tok_bug", "10", avg_price="0.5", realized_pnl="0")],
+        wallet=wallet,
+    )
+
+    wac_fact = _facts(result, "positions_wac_avg_price")[0]
+    assert wac_fact.abs_diff == Decimal("0.2")
+    assert wac_fact.tolerance == WAC_TOLERANCE
+    assert wac_fact.reason_code == "wac_drift"
+    assert wac_fact.status == "fail"
+    assert trust.status == "untrusted"
+
+
+def test_realized_pnl_within_band_passes(settings, session):
+    wallet = "0xrealizedband"
+    _seed_conditions(session, {"0xc1": ["tok_pnl", "tok_other"]})
+    _seed_ledger(
+        session,
+        wallet,
+        [
+            {
+                "type": "TRADE",
+                "ts": 100,
+                "condition_id": "0xc1",
+                "token_id": "tok_pnl",
+                "delta_shares": "10",
+                "delta_usdc": "-5",
+            },
+            {
+                "type": "TRADE",
+                "ts": 200,
+                "condition_id": "0xc1",
+                "token_id": "tok_pnl",
+                "delta_shares": "-4",
+                "delta_usdc": "3.2",
+            },
+        ],
+    )
+    rebuild_holdings(session, wallet, dust_epsilon=settings.dust_epsilon)
+    rebuild_episodes(session, wallet, dust_epsilon=settings.dust_epsilon)
+
+    result, trust = _run(
+        session,
+        settings,
+        [_oracle_position("tok_pnl", "6", avg_price="0.5", realized_pnl="1.205")],
+        wallet=wallet,
+    )
+
+    fact = _facts(result, "positions_realized_pnl")[0]
+    assert fact.computed == Decimal("1.2")
+    assert fact.abs_diff == Decimal("0.005")
+    assert fact.tolerance == REALIZED_PNL_TOLERANCE
+    assert fact.reason_code == "within_realized_pnl_band"
+    assert fact.status == "pass"
+    assert trust.status == "trusted"
+
+
+def test_realized_pnl_outside_band_warns_with_categorized_note(settings, session):
+    wallet = "0xrealizeddrift"
+    _seed_conditions(session, {"0xc1": ["tok_pnl", "tok_other"]})
+    _seed_ledger(
+        session,
+        wallet,
+        [
+            {
+                "type": "TRADE",
+                "ts": 100,
+                "condition_id": "0xc1",
+                "token_id": "tok_pnl",
+                "delta_shares": "10",
+                "delta_usdc": "-5",
+            },
+            {
+                "type": "TRADE",
+                "ts": 200,
+                "condition_id": "0xc1",
+                "token_id": "tok_pnl",
+                "delta_shares": "-4",
+                "delta_usdc": "3.2",
+            },
+        ],
+    )
+    rebuild_holdings(session, wallet, dust_epsilon=settings.dust_epsilon)
+    rebuild_episodes(session, wallet, dust_epsilon=settings.dust_epsilon)
+
+    result, trust = _run(
+        session,
+        settings,
+        [_oracle_position("tok_pnl", "6", avg_price="0.5", realized_pnl="1.5")],
+        wallet=wallet,
+    )
+
+    fact = _facts(result, "positions_realized_pnl")[0]
+    assert fact.abs_diff == Decimal("0.3")
+    assert fact.status == "warn"
+    assert fact.reason_code == "realized_pnl_trade_accounting_drift"
+    assert fact.notes["classification"] == "trade_accounting_or_oracle_semantics_drift"
+    assert trust.status == "warn"
+
+
+def test_missing_oracle_avgprice_and_realized_pnl_are_skipped(settings, session):
+    wallet = "0xoracleskip"
+    _seed_conditions(session, {"0xc1": ["tok_skip", "tok_other"]})
+    _seed_ledger(
+        session,
+        wallet,
+        [
+            {
+                "type": "TRADE",
+                "ts": 100,
+                "condition_id": "0xc1",
+                "token_id": "tok_skip",
+                "delta_shares": "10",
+                "delta_usdc": "-5",
+            }
+        ],
+    )
+    rebuild_holdings(session, wallet, dust_epsilon=settings.dust_epsilon)
+    rebuild_episodes(session, wallet, dust_epsilon=settings.dust_epsilon)
+
+    result, trust = _run(
+        session,
+        settings,
+        [_position("tok_skip", "10")],
+        wallet=wallet,
+    )
+
+    wac_fact = _facts(result, "positions_wac_avg_price")[0]
+    realized_fact = _facts(result, "positions_realized_pnl")[0]
+    assert wac_fact.status == "skip"
+    assert wac_fact.reason_code == "oracle_field_missing"
+    assert realized_fact.status == "skip"
+    assert realized_fact.reason_code == "oracle_field_missing"
     assert trust.status == "trusted"
 
 
@@ -352,6 +601,7 @@ def test_json_output_schema_stable(settings, session, monkeypatch):
         "known_exception_count",
         "known_exceptions",
         "analytics_trust_caveat",
+        "check_status",
         "top_qty_discrepancies",
         "top_notional_discrepancies",
         "top_remote_positions",

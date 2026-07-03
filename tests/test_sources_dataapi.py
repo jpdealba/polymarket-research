@@ -196,6 +196,7 @@ def test_fetch_positions_pages_and_raw_stores(settings, session):
             "conditionId": "0xabc",
             "size": i + 1,
             "avgPrice": "0.5",
+            "realizedPnl": "0.12",
             "curPrice": "0.6",
             "currentValue": str((i + 1) * 0.6),
             "title": "Question",
@@ -212,6 +213,7 @@ def test_fetch_positions_pages_and_raw_stores(settings, session):
     assert outcome.rows_fetched == 501
     assert outcome.positions[0].token_id == "tok0"
     assert outcome.positions[0].size == 1
+    assert str(outcome.positions[0].realized_pnl) == "0.12"
     assert [int(req["offset"]) for req in transport.requests] == [0, 500]
     persisted = session.execute(
         text("SELECT endpoint, row_count, params_json FROM raw_fetches ORDER BY id")

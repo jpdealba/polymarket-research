@@ -99,6 +99,13 @@ def _emit_result(result, trust: dict | None) -> None:
             **summary
         )
     )
+    click.echo("\n== Per-check status ==")
+    for check_type, counts in result.check_status_counts().items():
+        click.echo(
+            f"{check_type}: total={counts['total']} pass={counts.get('pass', 0)} "
+            f"warn={counts.get('warn', 0)} fail={counts.get('fail', 0)} "
+            f"skip={counts.get('skip', 0)}"
+        )
     _emit_known_exceptions(result)
 
     click.echo("\n== Negative holdings in /positions ==")
@@ -122,6 +129,12 @@ def _emit_result(result, trust: dict | None) -> None:
             f"status={row['status']} reason={row['reason_code']} "
             f"title={notes.get('remote_title')!r} outcome={notes.get('remote_outcome')!r}"
         )
+
+    click.echo("\n== WAC vs avgPrice discrepancies ==")
+    _emit_oracle_discrepancies(result, "positions_wac_avg_price")
+
+    click.echo("\n== realizedPnl discrepancies ==")
+    _emit_oracle_discrepancies(result, "positions_realized_pnl")
 
 
 def _emit_known_exceptions(result) -> None:
@@ -169,4 +182,25 @@ def _emit_discrepancies(rows: list[dict]) -> None:
             f"condition={notes.get('local_condition_id') or notes.get('remote_condition_id')} "
             f"title={notes.get('remote_title') or notes.get('local_question')!r} "
             f"outcome={notes.get('remote_outcome') or notes.get('local_outcome')!r}"
+        )
+
+
+def _emit_oracle_discrepancies(result, check_type: str) -> None:
+    facts = [
+        fact
+        for fact in result.facts
+        if fact.check_type == check_type and fact.status in {"warn", "fail", "skip"}
+    ]
+    if not facts:
+        click.echo("(none)")
+        return
+    for fact in sorted(facts, key=lambda item: item.abs_diff, reverse=True)[:20]:
+        notes = fact.notes
+        click.echo(
+            f"token={fact.subject} oracle={decimal_string(fact.expected)} "
+            f"local={decimal_string(fact.computed)} diff={decimal_string(fact.abs_diff)} "
+            f"tolerance={decimal_string(fact.tolerance)} status={fact.status} "
+            f"reason={fact.reason_code} classification={notes.get('classification')} "
+            f"scope={notes.get('comparison_scope')} title={notes.get('remote_title')!r} "
+            f"outcome={notes.get('remote_outcome')!r}"
         )

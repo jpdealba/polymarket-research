@@ -71,6 +71,7 @@ class PositionRow:
     title: Optional[str]
     outcome: Optional[str]
     raw: dict
+    realized_pnl: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,7 @@ def _parse_position(row: object) -> PositionRow:
         title=str(row["title"]) if row.get("title") is not None else None,
         outcome=str(row["outcome"]) if row.get("outcome") is not None else None,
         raw=row,
+        realized_pnl=_decimal(row.get("realizedPnl")),
     )
 
 

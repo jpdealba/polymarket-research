@@ -32,18 +32,34 @@ class WalletTrust:
 
 
 def derive_trust(wallet: str, run_ts: int, facts: list[ReconciliationFact]) -> WalletTrust:
-    size_facts = [fact for fact in facts if fact.check_type == "positions_size"]
-    failures = [fact for fact in size_facts if fact.status == "fail"]
-    warnings = [fact for fact in size_facts if fact.status == "warn"]
+    hard_facts = [
+        fact
+        for fact in facts
+        if fact.check_type in {"positions_size", "positions_wac_avg_price"}
+        and fact.status != "skip"
+    ]
+    realized_facts = [
+        fact
+        for fact in facts
+        if fact.check_type == "positions_realized_pnl" and fact.status != "skip"
+    ]
+    failures = [fact for fact in hard_facts if fact.status == "fail"]
+    warnings = [fact for fact in hard_facts if fact.status == "warn"]
+    realized_warnings = [
+        fact for fact in realized_facts if fact.status in {"warn", "fail"}
+    ]
     if failures:
         status = "untrusted"
         reason = _reason("fail", failures)
     elif warnings:
         status = "warn"
         reason = _reason("warn", warnings)
+    elif realized_warnings:
+        status = "warn"
+        reason = _reason("realized_pnl_warn_phase7", realized_warnings)
     else:
         status = "trusted"
-        reason = "all hard reconciliation checks passed"
+        reason = "all hard reconciliation checks passed; realizedPnl checks within Phase 7 band"
     return WalletTrust(
         wallet=wallet.lower(),
         status=status,

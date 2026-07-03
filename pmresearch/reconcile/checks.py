@@ -1,4 +1,4 @@
-"""Holdings-vs-Data-API reconciliation checks (Phase 5)."""
+"""Holdings-vs-Data-API reconciliation checks."""
 
 from __future__ import annotations
 
@@ -20,20 +20,29 @@ from ..reports.holdings_dq import (
 from ..sources.dataapi import PositionRow
 
 RECONCILE_TOLERANCE = Decimal("0.0001")
+WAC_TOLERANCE = Decimal("0.001")
+REALIZED_PNL_TOLERANCE = Decimal("0.01")
 _ZERO = Decimal("0")
 
-PASS_REASONS = {"exact_match", "dust_only"}
+PASS_REASONS = {"exact_match", "dust_only", "within_realized_pnl_band"}
 WARN_REASONS = {
     "timing_skew",
     "metadata_unavailable_upstream",
     "merge_condition_scoped_size_gap",
     "same_timestamp_redeem_merge_ordering_ambiguity",
+    "realized_pnl_trade_accounting_drift",
+    "realized_pnl_merge_split_semantics",
+    "realized_pnl_resolution_semantics",
+    "wac_size_reconciliation_not_clean",
+    "wac_timing_skew",
 }
 FAIL_REASONS = {
     "local_negative_holding",
     "remote_missing_local_present",
     "local_missing_remote_present",
     "source_api_missing_fill",
+    "wac_drift",
+    "local_open_episode_missing",
     "unknown",
 }
 KNOWN_EXCEPTION_REASONS = {"source_api_missing_fill"}
@@ -59,6 +68,19 @@ class LocalHolding:
     condition_id: Optional[str]
     outcome_label: Optional[str]
     question: Optional[str]
+
+
+@dataclass(frozen=True)
+class LocalOpenEpisode:
+    episode_id: int
+    token_id: str
+    condition_id: Optional[str]
+    open_ts: int
+    wac_entry: Decimal
+    realized_pnl: Decimal
+    events_consumed: tuple[int, ...]
+    event_types: tuple[str, ...]
+    duplicate_open_episodes: int = 0
 
 
 @dataclass(frozen=True)
@@ -145,6 +167,17 @@ class ReconciliationResult:
     def size_facts(self) -> list[ReconciliationFact]:
         return [fact for fact in self.facts if fact.check_type == "positions_size"]
 
+    def check_status_counts(self) -> dict[str, dict[str, int]]:
+        checks: dict[str, dict[str, int]] = {}
+        for fact in self.facts:
+            row = checks.setdefault(
+                fact.check_type,
+                {"total": 0, "pass": 0, "warn": 0, "fail": 0, "skip": 0},
+            )
+            row["total"] += 1
+            row[fact.status] = row.get(fact.status, 0) + 1
+        return dict(sorted(checks.items()))
+
     def summary(self) -> dict:
         size_facts = self.size_facts
         exact = sum(1 for fact in size_facts if fact.reason_code == "exact_match")
@@ -158,6 +191,7 @@ class ReconciliationResult:
             "passes": passes,
             "warnings": warnings,
             "fails": failures,
+            "checks": self.check_status_counts(),
         }
 
     def top_qty_discrepancies(self, limit: int = 20) -> list[dict]:
@@ -231,6 +265,7 @@ class ReconciliationResult:
                 "known_exception_count": len(known_exceptions),
                 "known_exception_types": exception_types,
             },
+            "check_status": self.check_status_counts(),
             "top_qty_discrepancies": self.top_qty_discrepancies(),
             "top_notional_discrepancies": self.top_notional_discrepancies(),
             "top_remote_positions": self.top_remote_positions(),
@@ -270,6 +305,74 @@ def load_local_holdings(session: Session, wallet: str) -> dict[str, LocalHolding
     }
 
 
+def load_open_episodes(session: Session, wallet: str) -> dict[str, LocalOpenEpisode]:
+    rows = session.execute(
+        text(
+            "SELECT id, token_id, condition_id, open_ts, wac_entry, realized_pnl, "
+            "events_consumed FROM episodes "
+            "WHERE wallet = :w AND close_reason = 'open' "
+            "ORDER BY token_id, open_ts DESC, id DESC"
+        ),
+        {"w": wallet.lower()},
+    ).fetchall()
+    duplicates: dict[str, int] = {}
+    selected: dict[str, object] = {}
+    for row in rows:
+        duplicates[row.token_id] = duplicates.get(row.token_id, 0) + 1
+        selected.setdefault(row.token_id, row)
+
+    event_ids = sorted(
+        {
+            event_id
+            for row in selected.values()
+            for event_id in _parse_event_ids(row.events_consumed)
+        }
+    )
+    event_types_by_id: dict[int, str] = {}
+    if event_ids:
+        type_rows = session.execute(
+            text(
+                "SELECT id, event_type FROM wallet_events "
+                f"WHERE id IN ({','.join(str(int(i)) for i in event_ids)})"
+            )
+        ).fetchall()
+        event_types_by_id = {int(row.id): row.event_type for row in type_rows}
+
+    episodes: dict[str, LocalOpenEpisode] = {}
+    for token_id, row in selected.items():
+        ids = _parse_event_ids(row.events_consumed)
+        episodes[token_id] = LocalOpenEpisode(
+            episode_id=int(row.id),
+            token_id=row.token_id,
+            condition_id=row.condition_id,
+            open_ts=int(row.open_ts),
+            wac_entry=decimal_value(row.wac_entry),
+            realized_pnl=decimal_value(row.realized_pnl),
+            events_consumed=ids,
+            event_types=tuple(
+                sorted({event_types_by_id[event_id] for event_id in ids if event_id in event_types_by_id})
+            ),
+            duplicate_open_episodes=duplicates.get(token_id, 1) - 1,
+        )
+    return episodes
+
+
+def _parse_event_ids(value: object) -> tuple[int, ...]:
+    try:
+        payload = json.loads(value or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return ()
+    if not isinstance(payload, list):
+        return ()
+    out = []
+    for item in payload:
+        try:
+            out.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return tuple(out)
+
+
 def _pct_diff(abs_diff: Decimal, expected: Decimal) -> Decimal:
     denominator = abs(expected)
     if denominator == _ZERO:
@@ -283,6 +386,225 @@ def _status_for_reason(reason_code: str) -> str:
     if reason_code in WARN_REASONS:
         return "warn"
     return "fail"
+
+
+def _has_oracle_field(remote: PositionRow, field_name: str) -> bool:
+    return field_name in remote.raw and remote.raw.get(field_name) not in (None, "")
+
+
+def _open_episode_notes(
+    local: Optional[LocalHolding],
+    remote: PositionRow,
+    episode: Optional[LocalOpenEpisode],
+    note: str,
+) -> dict:
+    notes = _base_notes(local, remote, note)
+    notes["comparison_scope"] = "current_open_episode"
+    notes["open_episode_id"] = episode.episode_id if episode else None
+    notes["open_episode_ts"] = episode.open_ts if episode else None
+    notes["open_episode_wac_entry"] = decimal_string(episode.wac_entry) if episode else "0"
+    notes["open_episode_realized_pnl"] = (
+        decimal_string(episode.realized_pnl) if episode else "0"
+    )
+    notes["open_episode_events_consumed"] = list(episode.events_consumed) if episode else []
+    notes["open_episode_event_types"] = list(episode.event_types) if episode else []
+    notes["duplicate_open_episodes"] = episode.duplicate_open_episodes if episode else 0
+    return notes
+
+
+def _skipped_oracle_fact(
+    *,
+    wallet: str,
+    run_ts: int,
+    check_type: str,
+    subject: str,
+    tolerance: Decimal,
+    source: str,
+    notes: dict,
+) -> ReconciliationFact:
+    return ReconciliationFact(
+        wallet=wallet,
+        ts=run_ts,
+        check_type=check_type,
+        subject=subject,
+        expected=_ZERO,
+        computed=_ZERO,
+        abs_diff=_ZERO,
+        pct_diff=_ZERO,
+        tolerance=tolerance,
+        status="skip",
+        source=source,
+        reason_code="oracle_field_missing",
+        notes=notes,
+    )
+
+
+def wac_vs_avgprice_fact(
+    *,
+    wallet: str,
+    run_ts: int,
+    local: Optional[LocalHolding],
+    remote: PositionRow,
+    episode: Optional[LocalOpenEpisode],
+    tolerance: Decimal,
+    size_fact: Optional[ReconciliationFact] = None,
+    timing_skew: bool = False,
+) -> ReconciliationFact:
+    notes = _open_episode_notes(
+        local,
+        remote,
+        episode,
+        "avgPrice is compared against the current open episode WAC, not lifetime WAC",
+    )
+    if not _has_oracle_field(remote, "avgPrice"):
+        notes["oracle_field"] = "avgPrice"
+        return _skipped_oracle_fact(
+            wallet=wallet,
+            run_ts=run_ts,
+            check_type="positions_wac_avg_price",
+            subject=remote.token_id,
+            tolerance=tolerance,
+            source="dataapi/positions",
+            notes=notes,
+        )
+    if episode is None:
+        notes["note"] = "remote position has avgPrice but no local open episode"
+        return ReconciliationFact(
+            wallet=wallet,
+            ts=run_ts,
+            check_type="positions_wac_avg_price",
+            subject=remote.token_id,
+            expected=remote.avg_price,
+            computed=_ZERO,
+            abs_diff=abs(remote.avg_price),
+            pct_diff=_pct_diff(abs(remote.avg_price), remote.avg_price),
+            tolerance=tolerance,
+            status="fail",
+            source="dataapi/positions",
+            reason_code="local_open_episode_missing",
+            notes=notes,
+        )
+
+    abs_diff = abs(remote.avg_price - episode.wac_entry)
+    reason = "exact_match" if abs_diff == _ZERO else (
+        "dust_only" if abs_diff <= tolerance else "wac_drift"
+    )
+    status = "pass" if reason in PASS_REASONS else "fail"
+    if reason == "wac_drift":
+        if size_fact is not None and size_fact.status != "pass":
+            status = "warn"
+            reason = "wac_size_reconciliation_not_clean"
+            notes["classification"] = "size_check_not_clean"
+            notes["size_check_status"] = size_fact.status
+            notes["size_check_reason"] = size_fact.reason_code
+            notes["size_abs_diff"] = decimal_string(size_fact.abs_diff)
+        elif timing_skew:
+            status = "warn"
+            reason = "wac_timing_skew"
+            notes["classification"] = "local_sync_or_oracle_timing_skew"
+        else:
+            notes["classification"] = "current_open_episode_wac_drift"
+    return ReconciliationFact(
+        wallet=wallet,
+        ts=run_ts,
+        check_type="positions_wac_avg_price",
+        subject=remote.token_id,
+        expected=remote.avg_price,
+        computed=episode.wac_entry,
+        abs_diff=abs_diff,
+        pct_diff=_pct_diff(abs_diff, remote.avg_price),
+        tolerance=tolerance,
+        status=status,
+        source="dataapi/positions",
+        reason_code=reason,
+        notes=notes,
+    )
+
+
+def realized_vs_oracle_fact(
+    *,
+    wallet: str,
+    run_ts: int,
+    local: Optional[LocalHolding],
+    remote: PositionRow,
+    episode: Optional[LocalOpenEpisode],
+    tolerance: Decimal,
+    timing_skew: bool,
+) -> ReconciliationFact:
+    notes = _open_episode_notes(
+        local,
+        remote,
+        episode,
+        "realizedPnl is compared for the current open episode; Phase 8 will add redemption payouts",
+    )
+    if not _has_oracle_field(remote, "realizedPnl"):
+        notes["oracle_field"] = "realizedPnl"
+        return _skipped_oracle_fact(
+            wallet=wallet,
+            run_ts=run_ts,
+            check_type="positions_realized_pnl",
+            subject=remote.token_id,
+            tolerance=tolerance,
+            source="dataapi/positions",
+            notes=notes,
+        )
+    if episode is None:
+        notes["note"] = "remote position has realizedPnl but no local open episode"
+        return ReconciliationFact(
+            wallet=wallet,
+            ts=run_ts,
+            check_type="positions_realized_pnl",
+            subject=remote.token_id,
+            expected=remote.realized_pnl,
+            computed=_ZERO,
+            abs_diff=abs(remote.realized_pnl),
+            pct_diff=_pct_diff(abs(remote.realized_pnl), remote.realized_pnl),
+            tolerance=tolerance,
+            status="fail",
+            source="dataapi/positions",
+            reason_code="local_open_episode_missing",
+            notes=notes,
+        )
+
+    abs_diff = abs(remote.realized_pnl - episode.realized_pnl)
+    if abs_diff == _ZERO:
+        reason = "exact_match"
+        status = "pass"
+        notes["classification"] = "matched"
+    elif abs_diff <= tolerance:
+        reason = "within_realized_pnl_band"
+        status = "pass"
+        notes["classification"] = "rounding_or_display_precision"
+    else:
+        status = "warn"
+        event_types = set(episode.event_types)
+        if timing_skew:
+            reason = "timing_skew"
+            notes["classification"] = "local_sync_or_oracle_timing_skew"
+        elif "REDEEM" in event_types:
+            reason = "realized_pnl_resolution_semantics"
+            notes["classification"] = "expected_phase8_redemption_payout_gap"
+        elif event_types & {"MERGE", "SPLIT"}:
+            reason = "realized_pnl_merge_split_semantics"
+            notes["classification"] = "oracle_merge_split_semantics_may_differ"
+        else:
+            reason = "realized_pnl_trade_accounting_drift"
+            notes["classification"] = "trade_accounting_or_oracle_semantics_drift"
+    return ReconciliationFact(
+        wallet=wallet,
+        ts=run_ts,
+        check_type="positions_realized_pnl",
+        subject=remote.token_id,
+        expected=remote.realized_pnl,
+        computed=episode.realized_pnl,
+        abs_diff=abs_diff,
+        pct_diff=_pct_diff(abs_diff, remote.realized_pnl),
+        tolerance=tolerance,
+        status=status,
+        source="dataapi/positions",
+        reason_code=reason,
+        notes=notes,
+    )
 
 
 def _condition_has_same_ts_redeem_merge(
@@ -465,10 +787,13 @@ def build_reconciliation_result(
     run_ts: int,
     remote_positions: list[PositionRow],
     tolerance: Decimal = RECONCILE_TOLERANCE,
+    wac_tolerance: Decimal = WAC_TOLERANCE,
+    realized_pnl_tolerance: Decimal = REALIZED_PNL_TOLERANCE,
     dust_epsilon: Decimal = Decimal("0.000001"),
 ) -> ReconciliationResult:
     wallet = wallet.lower()
     local_holdings = load_local_holdings(session, wallet)
+    open_episodes = load_open_episodes(session, wallet)
     remote_by_token = {row.token_id: row for row in remote_positions}
     local_nonzero_tokens = {
         token_id for token_id, holding in local_holdings.items() if abs(holding.qty) > dust_epsilon
@@ -517,47 +842,47 @@ def build_reconciliation_result(
         if reason in KNOWN_EXCEPTION_REASONS:
             notes["classification"] = "upstream_historical_gap"
             notes["policy"] = "keep visible; do not fabricate acquisition"
-        facts.append(
-            ReconciliationFact(
-                wallet=wallet,
-                ts=run_ts,
-                check_type="positions_size",
-                subject=token_id,
-                expected=expected,
-                computed=computed,
-                abs_diff=abs_diff,
-                pct_diff=_pct_diff(abs_diff, expected),
-                tolerance=tolerance,
-                status=status,
-                source="dataapi/positions",
-                reason_code=reason,
-                notes=notes,
-                estimated_notional_impact=abs_diff * price,
-            )
+        size_fact = ReconciliationFact(
+            wallet=wallet,
+            ts=run_ts,
+            check_type="positions_size",
+            subject=token_id,
+            expected=expected,
+            computed=computed,
+            abs_diff=abs_diff,
+            pct_diff=_pct_diff(abs_diff, expected),
+            tolerance=tolerance,
+            status=status,
+            source="dataapi/positions",
+            reason_code=reason,
+            notes=notes,
+            estimated_notional_impact=abs_diff * price,
         )
+        facts.append(size_fact)
 
         if local is not None and remote is not None and computed > tolerance:
-            avg_diff = abs(remote.avg_price - local.wac_cost)
-            avg_reason = "exact_match" if avg_diff == _ZERO else (
-                "dust_only" if avg_diff <= tolerance else "unknown"
+            episode = open_episodes.get(token_id)
+            facts.append(
+                wac_vs_avgprice_fact(
+                    wallet=wallet,
+                    run_ts=run_ts,
+                    local=local,
+                    remote=remote,
+                    episode=episode,
+                    tolerance=wac_tolerance,
+                    size_fact=size_fact,
+                    timing_skew=timing,
+                )
             )
             facts.append(
-                ReconciliationFact(
+                realized_vs_oracle_fact(
                     wallet=wallet,
-                    ts=run_ts,
-                    check_type="positions_avg_price_info",
-                    subject=token_id,
-                    expected=remote.avg_price,
-                    computed=local.wac_cost,
-                    abs_diff=avg_diff,
-                    pct_diff=_pct_diff(avg_diff, remote.avg_price),
-                    tolerance=tolerance,
-                    status="pass" if avg_reason in PASS_REASONS else "warn",
-                    source="dataapi/positions",
-                    reason_code=avg_reason,
-                    notes=_base_notes(
-                        local, remote, "avgPrice vs local wac_cost is informational in Phase 5"
-                    ),
+                    run_ts=run_ts,
+                    local=local,
+                    remote=remote,
+                    episode=episode,
+                    tolerance=realized_pnl_tolerance,
+                    timing_skew=timing,
                 )
             )
 
