@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 import json
-from typing import Optional
+from typing import Callable, Optional
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -23,6 +23,16 @@ class PnlRebuildStats:
     events_processed: int
     rows_written: int
     total_pnl: Decimal
+
+
+@dataclass(frozen=True)
+class PnlProgress:
+    wallet: str
+    stage: str
+    events_processed: int
+    events_total: int
+    rows_written: int
+    current_ts: int | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +99,8 @@ _EVENTS_SQL = text(
     "FROM wallet_events WHERE wallet = :wallet ORDER BY ts, id"
 )
 
+_COUNT_SQL = text("SELECT COUNT(*) AS event_count FROM wallet_events WHERE wallet = :wallet")
+
 _INSERT_SQL = text(
     "INSERT INTO pnl_decomposition "
     "(wallet, scope, period, directional_pnl, bond_merge_pnl, reward_income, "
@@ -142,7 +154,12 @@ def _derived_redeem_conditions(session: Session, wallet: str) -> set[str]:
 
 
 def rebuild_pnl_decomposition(
-    session: Session, wallet: str, *, dust_epsilon: Decimal = Decimal("0.000001")
+    session: Session,
+    wallet: str,
+    *,
+    dust_epsilon: Decimal = Decimal("0.000001"),
+    on_progress: Callable[[PnlProgress], None] | None = None,
+    event_progress_interval: int = 100000,
 ) -> PnlRebuildStats:
     wallet = wallet.lower()
     condition_tokens, token_conditions, condition_categories, resolution_prices = _load_metadata(
@@ -160,6 +177,8 @@ def rebuild_pnl_decomposition(
         }
     }
     events_processed = 0
+    events_total = int(session.execute(_COUNT_SQL, {"wallet": wallet}).scalar_one() or 0)
+    _emit_progress(on_progress, wallet, "start", 0, events_total, 0, None)
 
     def position(token_id: str) -> _Position:
         pos = positions.get(token_id)
@@ -193,10 +212,22 @@ def rebuild_pnl_decomposition(
             )
             row[component] += amount
 
-    for event in session.execute(_EVENTS_SQL, {"wallet": wallet}).fetchall():
+    for event in session.execute(
+        _EVENTS_SQL.execution_options(stream_results=True), {"wallet": wallet}
+    ):
         events_processed += 1
         etype = event.event_type
         condition_id = event.condition_id
+        if event_progress_interval > 0 and events_processed % event_progress_interval == 0:
+            _emit_progress(
+                on_progress,
+                wallet,
+                "events",
+                events_processed,
+                events_total,
+                0,
+                int(event.ts),
+            )
 
         if etype == "TRADE":
             if event.token_id is None:
@@ -260,6 +291,24 @@ def rebuild_pnl_decomposition(
                 add_component("redemption_pnl", pnl, condition_id=condition_id, token_id=token_id)
             continue
 
+        if etype == "RESOLUTION_SETTLEMENT":
+            # Token-scoped derived close for a resolved position no REDEEM
+            # ever touched. Classified under redemption_pnl: economically
+            # it's the same "position closes at resolution price" event as
+            # REDEEM_PAYOUT, just for a token the source never sent any
+            # REDEEM row for at all.
+            token_id = event.token_id
+            if token_id is None:
+                continue
+            pos = positions.get(token_id)
+            if pos is None or abs(pos.qty) <= dust_epsilon:
+                continue
+            prices = resolution_prices.get(condition_id or "", {})
+            proceeds = pos.qty * prices.get(token_id, _ZERO)
+            pnl = pos.close(proceeds)
+            add_component("redemption_pnl", pnl, condition_id=condition_id, token_id=token_id)
+            continue
+
         if etype in {"REWARD", "MAKER_REBATE", "TAKER_REBATE"}:
             add_component("reward_income", _decimal(event.delta_usdc), condition_id=condition_id, token_id=event.token_id)
 
@@ -281,6 +330,15 @@ def rebuild_pnl_decomposition(
     session.execute(text("DELETE FROM pnl_decomposition WHERE wallet = :wallet"), {"wallet": wallet})
     session.execute(_INSERT_SQL, rows)
     session.commit()
+    _emit_progress(
+        on_progress,
+        wallet,
+        "insert_flush",
+        events_processed,
+        events_total,
+        len(rows),
+        None,
+    )
     total = sum(
         (
             values["directional_pnl"]
@@ -293,6 +351,29 @@ def rebuild_pnl_decomposition(
         if scope == "all"
     )
     return PnlRebuildStats(wallet=wallet, events_processed=events_processed, rows_written=len(rows), total_pnl=total)
+
+
+def _emit_progress(
+    on_progress: Callable[[PnlProgress], None] | None,
+    wallet: str,
+    stage: str,
+    events_processed: int,
+    events_total: int,
+    rows_written: int,
+    current_ts: int | None,
+) -> None:
+    if on_progress is None:
+        return
+    on_progress(
+        PnlProgress(
+            wallet=wallet,
+            stage=stage,
+            events_processed=events_processed,
+            events_total=events_total,
+            rows_written=rows_written,
+            current_ts=current_ts,
+        )
+    )
 
 
 def fetch_pnl_decomposition(

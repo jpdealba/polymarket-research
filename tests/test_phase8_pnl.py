@@ -5,8 +5,9 @@ from click.testing import CliRunner
 from sqlalchemy import text
 
 from pmresearch.cli import main
-from pmresearch.ingest.derived import derive_redeem_payouts
+from pmresearch.ingest.derived import derive_redeem_payouts, derive_resolution_settlements
 from pmresearch.projections.episodes import rebuild_episodes
+from pmresearch.projections.holdings import fetch_holdings, rebuild_holdings
 from pmresearch.projections.pnl_decomposition import (
     fetch_pnl_decomposition,
     rebuild_pnl_decomposition,
@@ -271,3 +272,186 @@ def test_phase8_cli_smoke(session, settings, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "Sports:" in result.output
     assert "total=6" in result.output
+
+
+def _holding_qty(session, wallet, token_id):
+    rebuild_holdings(session, wallet, dust_epsilon=DUST)
+    rows = fetch_holdings(session, wallet)
+    matches = [row for row in rows if row.token_id == token_id]
+    return Decimal(matches[0].qty) if matches else Decimal("0")
+
+
+def test_resolution_settlement_losing_token_without_redeem_realizes_loss(session):
+    wallet = "0xlosernoredeem"
+    _seed_market(session)
+    _seed_ledger(
+        session,
+        wallet,
+        [
+            {"type": "TRADE", "ts": 100, "token_id": "lose", "delta_shares": "10", "delta_usdc": "-4"},
+        ],
+    )
+
+    stats = derive_resolution_settlements(session, wallet, dust_epsilon=DUST)
+    assert stats.resolved_open_tokens_seen == 1
+    assert stats.derived_events_inserted == 1
+
+    row = session.execute(
+        text(
+            "SELECT event_type, token_id, delta_shares, delta_usdc, is_derived, source "
+            "FROM wallet_events WHERE wallet = :wallet AND event_type = 'RESOLUTION_SETTLEMENT'"
+        ),
+        {"wallet": wallet},
+    ).fetchone()
+    assert row.event_type == "RESOLUTION_SETTLEMENT"
+    assert row.token_id == "lose"
+    assert Decimal(row.delta_shares) == Decimal("-10")
+    assert Decimal(row.delta_usdc) == Decimal("0")
+    assert row.is_derived == 1
+    assert row.source == "derived/resolution_settlement"
+
+    rebuild_episodes(session, wallet, dust_epsilon=DUST)
+    assert _episode_realized(session, wallet, "lose") == Decimal("-4")
+    assert _holding_qty(session, wallet, "lose") == Decimal("0")
+
+
+def test_resolution_settlement_winning_token_without_redeem_realizes_payout(session):
+    wallet = "0xwinnernoredeem"
+    _seed_market(session)
+    _seed_ledger(
+        session,
+        wallet,
+        [
+            {"type": "TRADE", "ts": 100, "token_id": "win", "delta_shares": "10", "delta_usdc": "-4"},
+        ],
+    )
+
+    stats = derive_resolution_settlements(session, wallet, dust_epsilon=DUST)
+    assert stats.derived_events_inserted == 1
+
+    row = session.execute(
+        text(
+            "SELECT token_id, delta_shares, delta_usdc "
+            "FROM wallet_events WHERE wallet = :wallet AND event_type = 'RESOLUTION_SETTLEMENT'"
+        ),
+        {"wallet": wallet},
+    ).fetchone()
+    assert row.token_id == "win"
+    assert Decimal(row.delta_shares) == Decimal("-10")
+    assert Decimal(row.delta_usdc) == Decimal("10")
+
+    rebuild_episodes(session, wallet, dust_epsilon=DUST)
+    assert _episode_realized(session, wallet, "win") == Decimal("6")
+
+    rebuild_pnl_decomposition(session, wallet, dust_epsilon=DUST)
+    row = fetch_pnl_decomposition(session, wallet)[0]
+    assert row.redemption_pnl == Decimal("6")
+    assert row.total_pnl == Decimal("6")
+
+
+def test_resolution_settlement_skips_position_already_closed_by_redeem(session):
+    wallet = "0xalreadyredeemed"
+    _seed_market(session)
+    _seed_ledger(
+        session,
+        wallet,
+        [
+            {"type": "TRADE", "ts": 100, "token_id": "win", "delta_shares": "10", "delta_usdc": "-4"},
+            {"type": "REDEEM", "ts": 200, "delta_shares": "-10", "delta_usdc": "0", "usdc_size": "0"},
+        ],
+    )
+
+    derive_redeem_payouts(session, wallet, dust_epsilon=DUST)
+    stats = derive_resolution_settlements(session, wallet, dust_epsilon=DUST)
+
+    assert stats.resolved_open_tokens_seen == 0
+    assert stats.derived_events_inserted == 0
+    count = session.execute(
+        text(
+            "SELECT COUNT(*) FROM wallet_events "
+            "WHERE wallet = :wallet AND event_type = 'RESOLUTION_SETTLEMENT'"
+        ),
+        {"wallet": wallet},
+    ).scalar_one()
+    assert count == 0
+
+
+def test_resolution_settlement_is_idempotent(session):
+    wallet = "0xsettleidempotent"
+    _seed_market(session)
+    _seed_ledger(
+        session,
+        wallet,
+        [
+            {"type": "TRADE", "ts": 100, "token_id": "lose", "delta_shares": "10", "delta_usdc": "-4"},
+        ],
+    )
+
+    first = derive_resolution_settlements(session, wallet, dust_epsilon=DUST)
+    second = derive_resolution_settlements(session, wallet, dust_epsilon=DUST)
+
+    assert first.derived_events_inserted == 1
+    assert second.derived_events_inserted == 0
+    count = session.execute(
+        text(
+            "SELECT COUNT(*) FROM wallet_events "
+            "WHERE wallet = :wallet AND event_type = 'RESOLUTION_SETTLEMENT'"
+        ),
+        {"wallet": wallet},
+    ).scalar_one()
+    assert count == 1
+
+
+def test_resolution_settlement_ignores_unresolved_market(session):
+    wallet = "0xunresolvedsplit"
+    _seed_market(session, condition_id="0xunresolved", prices=(None, None))
+    # Overwrite the seeded market to be unresolved (no resolution_prices_json).
+    session.execute(
+        text(
+            "UPDATE markets SET closed = 0, resolution_prices_json = NULL "
+            "WHERE condition_id = '0xunresolved'"
+        )
+    )
+    session.commit()
+    _seed_ledger(
+        session,
+        wallet,
+        [
+            {
+                "type": "SPLIT",
+                "ts": 100,
+                "condition_id": "0xunresolved",
+                "delta_shares": "10",
+                "delta_usdc": "-10",
+            },
+        ],
+    )
+
+    stats = derive_resolution_settlements(session, wallet, dust_epsilon=DUST)
+
+    assert stats.resolved_open_tokens_seen == 0
+    assert stats.derived_events_inserted == 0
+
+
+def test_resolution_settlement_ignores_dust_holding(session):
+    wallet = "0xdustholder"
+    _seed_market(session)
+    _seed_ledger(
+        session,
+        wallet,
+        [
+            {
+                "type": "TRADE",
+                "ts": 100,
+                "token_id": "lose",
+                "delta_shares": "0.0000001",
+                "delta_usdc": "-0.00000004",
+            },
+        ],
+    )
+
+    stats = derive_resolution_settlements(session, wallet, dust_epsilon=DUST)
+
+    assert stats.resolved_open_tokens_seen == 0
+    assert stats.derived_events_inserted == 0
+    assert stats.dust_skipped == 1

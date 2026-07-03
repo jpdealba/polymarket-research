@@ -287,7 +287,13 @@ class DataApiSource:
                 # more rows than we can reach by paging further.
                 return outcome, True
 
-    def fetch_positions(self, raw_store: RawStore, wallet: str) -> PositionsFetchOutcome:
+    def fetch_positions(
+        self,
+        raw_store: RawStore,
+        wallet: str,
+        *,
+        on_progress: Optional[Callable[[int, int], None]] = None,
+    ) -> PositionsFetchOutcome:
         """Fetch all current `/positions` rows for `wallet`.
 
         The Data API's default sizeThreshold is 1 share, which would hide dust
@@ -332,6 +338,8 @@ class DataApiSource:
                 raw_fetch_ids.append(raw_result.raw_fetch_id)
             requests_made += 1
             positions.extend(_parse_position(row) for row in rows)
+            if on_progress is not None:
+                on_progress(offset + len(rows), len(positions))
 
             if len(rows) < PAGE_LIMIT:
                 return PositionsFetchOutcome(

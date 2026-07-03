@@ -16,7 +16,7 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -110,6 +110,17 @@ def run_ingest(session: Session, *, wallet: Optional[str] = None) -> IngestStats
         params["wallet"] = wallet.lower()
     query += " ORDER BY id"
 
+    return _run_ingest(session, query=query, params=params, wallet=wallet)
+
+
+def _run_ingest(
+    session: Session,
+    *,
+    query: str,
+    params: dict,
+    wallet: Optional[str],
+    on_progress: Callable[[int, int, int, int], None] | None = None,
+) -> IngestStats:
     raw_fetches = session.execute(text(query), params).fetchall()
     raw_fetch_ids_processed = {raw_fetch.id for raw_fetch in raw_fetches}
 
@@ -117,7 +128,8 @@ def run_ingest(session: Session, *, wallet: Optional[str] = None) -> IngestStats
     events_inserted = 0
     now = datetime.now(timezone.utc).isoformat()
 
-    for raw_fetch in raw_fetches:
+    total_fetches = len(raw_fetches)
+    for index, raw_fetch in enumerate(raw_fetches, start=1):
         rows = _load_payload(raw_fetch.file_path)
         events, _ = _parse_rows(rows, raw_fetch.id)
         events_seen += len(events)
@@ -128,6 +140,8 @@ def run_ingest(session: Session, *, wallet: Optional[str] = None) -> IngestStats
         )
         session.commit()
         events_inserted += raw_events_inserted
+        if on_progress is not None:
+            on_progress(index, total_fetches, events_seen, events_inserted)
 
     duplicate_repair_fetches = 0
     if wallet is not None:
@@ -160,7 +174,32 @@ def run_ingest(session: Session, *, wallet: Optional[str] = None) -> IngestStats
     )
 
 
-def reparse_wallet(session: Session, wallet: str) -> IngestStats:
+def run_ingest_with_progress(
+    session: Session,
+    *,
+    wallet: Optional[str] = None,
+    on_progress: Callable[[int, int, int, int], None] | None = None,
+) -> IngestStats:
+    query = (
+        "SELECT id, file_path FROM raw_fetches "
+        "WHERE source = 'dataapi' AND endpoint = 'activity' AND ingested_at IS NULL"
+    )
+    params: dict = {}
+    if wallet is not None:
+        query += " AND json_extract(params_json, '$.user') = :wallet"
+        params["wallet"] = wallet.lower()
+    query += " ORDER BY id"
+    return _run_ingest(
+        session, query=query, params=params, wallet=wallet, on_progress=on_progress
+    )
+
+
+def reparse_wallet(
+    session: Session,
+    wallet: str,
+    *,
+    on_progress: Callable[[int, int, int, int], None] | None = None,
+) -> IngestStats:
     wallet = wallet.lower()
     session.execute(text("DELETE FROM wallet_events WHERE wallet = :w"), {"w": wallet})
     session.execute(
@@ -172,4 +211,4 @@ def reparse_wallet(session: Session, wallet: str) -> IngestStats:
         {"w": wallet},
     )
     session.commit()
-    return run_ingest(session, wallet=wallet)
+    return run_ingest_with_progress(session, wallet=wallet, on_progress=on_progress)

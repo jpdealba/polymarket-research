@@ -9,7 +9,11 @@ import click
 from ..config import ensure_data_dirs, get_settings
 from ..db.engine import get_session_factory
 from ..ledger.replay import ledger_wallets
-from ..projections.daily_equity import fetch_daily_equity, rebuild_daily_equity
+from ..projections.daily_equity import (
+    DailyEquityProgress,
+    fetch_daily_equity,
+    rebuild_daily_equity,
+)
 from ..reconcile.checks import decimal_string
 from ..walletmanager.manager import list_wallets
 
@@ -31,8 +35,13 @@ def equity_build(wallet: str | None) -> None:
             click.echo("No wallets to build.")
             return
         for address in wallets:
+            click.echo(f"{address}: starting daily equity build")
             stats = rebuild_daily_equity(
-                session, address, settings=settings, dust_epsilon=settings.dust_epsilon
+                session,
+                address,
+                settings=settings,
+                dust_epsilon=settings.dust_epsilon,
+                progress_fn=_emit_build_progress,
             )
             click.echo(
                 f"{stats.wallet}: rows={stats.rows_written} dates={stats.first_date}..{stats.last_date} "
@@ -82,3 +91,31 @@ def _active_or_ledger_wallets(session) -> list[str]:
 
 def _pct(value: Decimal) -> str:
     return f"{(value * Decimal('100')).quantize(Decimal('0.01'))}%"
+
+
+def _emit_build_progress(progress: DailyEquityProgress) -> None:
+    if progress.stage == "start":
+        click.echo(
+            f"  start: events_total={progress.events_total} "
+            f"first_date={progress.current_date}"
+        )
+    elif progress.stage == "events":
+        click.echo(
+            f"  events: {progress.events_processed}/{progress.events_total} "
+            f"date={progress.current_date} rows={progress.rows_written} "
+            f"marks={progress.marks_written}"
+        )
+    elif progress.stage == "marks_flush":
+        click.echo(
+            f"  flush price_points: marks={progress.marks_written} "
+            f"events={progress.events_processed}/{progress.events_total} "
+            f"date={progress.current_date}"
+        )
+    elif progress.stage == "equity_flush":
+        click.echo(
+            f"  flush daily_equity: rows={progress.rows_written} "
+            f"events={progress.events_processed}/{progress.events_total} "
+            f"date={progress.current_date} marks={progress.marks_written}"
+        )
+    elif progress.stage == "empty":
+        click.echo("  no wallet_events found")

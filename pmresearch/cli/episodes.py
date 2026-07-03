@@ -9,7 +9,12 @@ import click
 from ..config import ensure_data_dirs, get_settings
 from ..db.engine import get_session_factory
 from ..ledger.replay import ledger_wallets
-from ..projections.episodes import episode_stats, fetch_episodes, rebuild_episodes
+from ..projections.episodes import (
+    EpisodesProgress,
+    episode_stats,
+    fetch_episodes,
+    rebuild_episodes,
+)
 
 _DERIVED_CAVEAT = (
     "Note: run `pmr derive run` after market sync to include zero-reported "
@@ -27,7 +32,13 @@ def replay_episodes(wallet: str | None) -> None:
     try:
         wallets = [wallet] if wallet else ledger_wallets(session)
         for w in wallets:
-            stats = rebuild_episodes(session, w, dust_epsilon=settings.dust_epsilon)
+            click.echo(f"{w.lower()}: starting episodes rebuild")
+            stats = rebuild_episodes(
+                session,
+                w,
+                dust_epsilon=settings.dust_epsilon,
+                on_progress=_emit_episodes_progress,
+            )
             click.echo(
                 f"{stats.wallet}: {stats.events_processed} events -> "
                 f"{stats.episodes_written} episodes "
@@ -44,6 +55,21 @@ def replay_episodes(wallet: str | None) -> None:
         click.echo(_DERIVED_CAVEAT)
     finally:
         session.close()
+
+
+def _emit_episodes_progress(progress: EpisodesProgress) -> None:
+    if progress.stage == "start":
+        click.echo(f"  start: events_total={progress.events_total}")
+    elif progress.stage == "events":
+        click.echo(
+            f"  events: {progress.events_processed}/{progress.events_total} "
+            f"ts={progress.current_ts} rows={progress.rows_written}"
+        )
+    elif progress.stage == "insert_flush":
+        click.echo(
+            f"  flush episodes: rows={progress.rows_written} "
+            f"events={progress.events_processed}/{progress.events_total}"
+        )
 
 
 @click.group("episodes")

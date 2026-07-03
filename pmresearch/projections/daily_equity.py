@@ -6,13 +6,12 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 import json
-from typing import Optional
+from typing import Callable, Optional
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from ..config import Settings
-from ..marks.base import Mark
 from ..marks.base import Mark
 from ..marks.service import MarkService
 from .base import Projection
@@ -31,6 +30,17 @@ class DailyEquityStats:
     latest_portfolio_value: Decimal
     latest_stale_equity_share: Decimal
     max_drawdown: Decimal
+
+
+@dataclass(frozen=True)
+class DailyEquityProgress:
+    wallet: str
+    stage: str
+    events_processed: int
+    events_total: int
+    current_date: str | None
+    rows_written: int
+    marks_written: int
 
 
 @dataclass(frozen=True)
@@ -119,12 +129,20 @@ _BOUNDS_SQL = text(
     "FROM wallet_events WHERE wallet = :wallet"
 )
 
-_INSERT_SQL = text(
+_UPSERT_SQL = text(
     "INSERT INTO daily_equity "
     "(wallet, date, portfolio_value, realized_pnl_cum, unrealized_pnl, "
     "reward_income_cum, drawdown, stale_equity_share, projection_version) "
     "VALUES (:wallet, :date, :portfolio_value, :realized_pnl_cum, :unrealized_pnl, "
-    ":reward_income_cum, :drawdown, :stale_equity_share, :projection_version)"
+    ":reward_income_cum, :drawdown, :stale_equity_share, :projection_version) "
+    "ON CONFLICT(wallet, date) DO UPDATE SET "
+    "portfolio_value = excluded.portfolio_value, "
+    "realized_pnl_cum = excluded.realized_pnl_cum, "
+    "unrealized_pnl = excluded.unrealized_pnl, "
+    "reward_income_cum = excluded.reward_income_cum, "
+    "drawdown = excluded.drawdown, "
+    "stale_equity_share = excluded.stale_equity_share, "
+    "projection_version = excluded.projection_version"
 )
 
 
@@ -195,12 +213,17 @@ def rebuild_daily_equity(
     mark_service: MarkService | None = None,
     dust_epsilon: Decimal = Decimal("0.000001"),
     through_date: date | None = None,
+    progress_fn: Callable[[DailyEquityProgress], None] | None = None,
+    equity_batch_size: int = 25,
+    mark_batch_size: int = 5000,
+    event_progress_interval: int = 100000,
 ) -> DailyEquityStats:
     wallet = wallet.lower()
     bounds = session.execute(_BOUNDS_SQL, {"wallet": wallet}).fetchone()
     session.execute(text("DELETE FROM daily_equity WHERE wallet = :wallet"), {"wallet": wallet})
+    session.commit()
     if bounds is None or int(bounds.event_count or 0) == 0:
-        session.commit()
+        _emit_progress(progress_fn, wallet, "empty", 0, 0, None, 0, 0)
         return DailyEquityStats(wallet, 0, None, None, _ZERO, _ZERO, _ZERO)
 
     condition_tokens, resolution_prices, _ = _load_metadata(session)
@@ -217,6 +240,10 @@ def rebuild_daily_equity(
     peak_equity: Decimal | None = None
     output_rows: list[dict] = []
     mark_buffer: list[Mark] = []
+    events_total = int(bounds.event_count or 0)
+    events_processed = 0
+    rows_written = 0
+    marks_written = 0
 
     first_day = _utc_date(int(bounds.min_ts))
     last_event_day = _utc_date(int(bounds.max_ts))
@@ -229,6 +256,17 @@ def rebuild_daily_equity(
     )
     next_event = next(event_iter, None)
     current_day = first_day
+
+    _emit_progress(
+        progress_fn,
+        wallet,
+        "start",
+        events_processed,
+        events_total,
+        current_day.isoformat(),
+        rows_written,
+        marks_written,
+    )
 
     def position(token_id: str) -> _Position:
         pos = positions.get(token_id)
@@ -297,11 +335,22 @@ def rebuild_daily_equity(
                 realized_pnl += pos.close(pos.qty * prices.get(token_id, _ZERO))
             return
 
+        if etype == "RESOLUTION_SETTLEMENT":
+            token_id = event.token_id
+            if token_id is None:
+                return
+            pos = positions.get(token_id)
+            if pos is None or abs(pos.qty) <= dust_epsilon:
+                return
+            prices = resolution_prices.get(condition_id or "", {})
+            realized_pnl += pos.close(pos.qty * prices.get(token_id, _ZERO))
+            return
+
         if etype in {"REWARD", "MAKER_REBATE", "TAKER_REBATE"}:
             reward_income += _decimal(event.delta_usdc)
 
     def snapshot(day: date) -> None:
-        nonlocal peak_equity
+        nonlocal peak_equity, marks_written
         ts = _day_end_ts(day)
         portfolio_value = _ZERO
         open_cost = _ZERO
@@ -315,9 +364,21 @@ def rebuild_daily_equity(
             if mark is None:
                 continue
             mark_buffer.append(mark)
-            if len(mark_buffer) >= 5000:
+            if len(mark_buffer) >= mark_batch_size:
                 mark_service.persist_marks(session, mark_buffer)
+                session.commit()
+                marks_written += len(mark_buffer)
                 mark_buffer.clear()
+                _emit_progress(
+                    progress_fn,
+                    wallet,
+                    "marks_flush",
+                    events_processed,
+                    events_total,
+                    day.isoformat(),
+                    rows_written,
+                    marks_written,
+                )
             value = pos.qty * mark.price
             portfolio_value += value
             gross_value += abs(value)
@@ -343,36 +404,107 @@ def rebuild_daily_equity(
             }
         )
 
+    def flush_equity_rows(stage: str, current: date | None) -> None:
+        nonlocal rows_written
+        if not output_rows:
+            return
+        session.execute(_UPSERT_SQL, output_rows)
+        session.commit()
+        rows_written += len(output_rows)
+        output_rows.clear()
+        _emit_progress(
+            progress_fn,
+            wallet,
+            stage,
+            events_processed,
+            events_total,
+            current.isoformat() if current else None,
+            rows_written,
+            marks_written,
+        )
+
     try:
         while current_day <= end_day:
             next_day = current_day + timedelta(days=1)
             while next_event is not None and _utc_date(int(next_event.ts)) < next_day:
                 apply_event(next_event)
+                events_processed += 1
+                if (
+                    event_progress_interval > 0
+                    and events_processed % event_progress_interval == 0
+                ):
+                    _emit_progress(
+                        progress_fn,
+                        wallet,
+                        "events",
+                        events_processed,
+                        events_total,
+                        current_day.isoformat(),
+                        rows_written,
+                        marks_written,
+                    )
                 next_event = next(event_iter, None)
             snapshot(current_day)
+            if len(output_rows) >= equity_batch_size:
+                flush_equity_rows("equity_flush", current_day)
             current_day = next_day
     finally:
         if mark_buffer:
             mark_service.persist_marks(session, mark_buffer)
+            session.commit()
+            marks_written += len(mark_buffer)
             mark_buffer.clear()
+            _emit_progress(
+                progress_fn,
+                wallet,
+                "marks_flush",
+                events_processed,
+                events_total,
+                end_day.isoformat(),
+                rows_written,
+                marks_written,
+            )
         if owns_mark_service and mark_service is not None:
             mark_service.close()
 
-    for start in range(0, len(output_rows), 5000):
-        session.execute(_INSERT_SQL, output_rows[start : start + 5000])
-    session.commit()
+    flush_equity_rows("equity_flush", end_day)
 
     rows = fetch_daily_equity(session, wallet)
     latest = rows[-1] if rows else None
     max_drawdown = max((row.drawdown for row in rows), default=_ZERO)
     return DailyEquityStats(
         wallet=wallet,
-        rows_written=len(output_rows),
-        first_date=output_rows[0]["date"] if output_rows else None,
-        last_date=output_rows[-1]["date"] if output_rows else None,
+        rows_written=rows_written,
+        first_date=first_day.isoformat() if rows_written else None,
+        last_date=end_day.isoformat() if rows_written else None,
         latest_portfolio_value=latest.portfolio_value if latest else _ZERO,
         latest_stale_equity_share=latest.stale_equity_share if latest else _ZERO,
         max_drawdown=max_drawdown,
+    )
+
+
+def _emit_progress(
+    progress_fn: Callable[[DailyEquityProgress], None] | None,
+    wallet: str,
+    stage: str,
+    events_processed: int,
+    events_total: int,
+    current_date: str | None,
+    rows_written: int,
+    marks_written: int,
+) -> None:
+    if progress_fn is None:
+        return
+    progress_fn(
+        DailyEquityProgress(
+            wallet=wallet,
+            stage=stage,
+            events_processed=events_processed,
+            events_total=events_total,
+            current_date=current_date,
+            rows_written=rows_written,
+            marks_written=marks_written,
+        )
     )
 
 

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import Decimal
+import inspect
 import json
 import time
+from typing import Callable
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -36,6 +39,14 @@ _INSERT_FACT_SQL = text(
 )
 
 
+@dataclass(frozen=True)
+class ReconciliationProgress:
+    wallet: str
+    stage: str
+    processed: int
+    total: int | None = None
+
+
 def run_reconciliation(
     session: Session,
     settings: Settings,
@@ -44,6 +55,7 @@ def run_reconciliation(
     source: DataApiSource | None = None,
     tolerance: Decimal = RECONCILE_TOLERANCE,
     run_ts: int | None = None,
+    on_progress: Callable[[ReconciliationProgress], None] | None = None,
 ) -> tuple[ReconciliationResult, WalletTrust]:
     wallet = wallet.lower()
     run_ts = run_ts or int(time.time())
@@ -52,7 +64,23 @@ def run_reconciliation(
     source = source or DataApiSource()
     try:
         try:
-            fetched = source.fetch_positions(raw_store, wallet)
+            _emit_progress(on_progress, wallet, "fetch_positions_start", 0, None)
+
+            def positions_progress(requested_rows: int, parsed_rows: int) -> None:
+                _emit_progress(
+                    on_progress,
+                    wallet,
+                    "fetch_positions_page",
+                    parsed_rows,
+                    requested_rows,
+                )
+
+            fetched = _fetch_positions_with_optional_progress(
+                source, raw_store, wallet, positions_progress
+            )
+            _emit_progress(
+                on_progress, wallet, "build_checks_start", len(fetched.positions), None
+            )
             result = build_reconciliation_result(
                 session,
                 wallet=wallet,
@@ -67,10 +95,11 @@ def run_reconciliation(
         except PositionsFetchIncomplete as exc:
             result = _incomplete_fetch_result(wallet, run_ts, tolerance, str(exc))
 
-        persist_facts(session, result.facts)
+        persist_facts(session, result.facts, wallet=wallet, on_progress=on_progress)
         trust = derive_trust(wallet, run_ts, list(result.facts))
         trust = upsert_wallet_trust(session, trust)
         session.commit()
+        _emit_progress(on_progress, wallet, "complete", len(result.facts), len(result.facts))
         return result, trust
     except Exception:
         session.rollback()
@@ -119,6 +148,21 @@ def _with_value_check(
     )
 
 
+def _fetch_positions_with_optional_progress(
+    source: DataApiSource,
+    raw_store: RawStore,
+    wallet: str,
+    on_progress: Callable[[int, int], None],
+):
+    try:
+        params = inspect.signature(source.fetch_positions).parameters
+    except (TypeError, ValueError):
+        params = {}
+    if "on_progress" in params:
+        return source.fetch_positions(raw_store, wallet, on_progress=on_progress)
+    return source.fetch_positions(raw_store, wallet)
+
+
 def _incomplete_fetch_result(
     wallet: str, run_ts: int, tolerance: Decimal, message: str
 ) -> ReconciliationResult:
@@ -154,10 +198,43 @@ def _incomplete_fetch_result(
     )
 
 
-def persist_facts(session: Session, facts: tuple[ReconciliationFact, ...]) -> None:
+def persist_facts(
+    session: Session,
+    facts: tuple[ReconciliationFact, ...],
+    *,
+    wallet: str | None = None,
+    on_progress: Callable[[ReconciliationProgress], None] | None = None,
+    batch_size: int = 5000,
+) -> None:
     if not facts:
         return
-    session.execute(_INSERT_FACT_SQL, [fact.db_params() for fact in facts])
+    written = 0
+    fact_list = list(facts)
+    for start in range(0, len(fact_list), batch_size):
+        batch = fact_list[start : start + batch_size]
+        session.execute(_INSERT_FACT_SQL, [fact.db_params() for fact in batch])
+        session.commit()
+        written += len(batch)
+        if wallet is not None:
+            _emit_progress(
+                on_progress,
+                wallet,
+                "facts_flush",
+                written,
+                len(fact_list),
+            )
+
+
+def _emit_progress(
+    on_progress: Callable[[ReconciliationProgress], None] | None,
+    wallet: str,
+    stage: str,
+    processed: int,
+    total: int | None,
+) -> None:
+    if on_progress is None:
+        return
+    on_progress(ReconciliationProgress(wallet=wallet, stage=stage, processed=processed, total=total))
 
 
 def latest_reconciliation_result(

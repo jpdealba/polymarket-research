@@ -5,6 +5,7 @@ just wires the two together and decides window boundaries."""
 from __future__ import annotations
 
 import time
+from typing import Callable
 
 from sqlalchemy.orm import Session
 
@@ -15,7 +16,13 @@ from . import manager
 
 
 def run_backfill(
-    session: Session, settings: Settings, raw_store: RawStore, source: DataApiSource, address: str
+    session: Session,
+    settings: Settings,
+    raw_store: RawStore,
+    source: DataApiSource,
+    address: str,
+    *,
+    on_progress: Callable[[int], None] | None = None,
 ) -> FetchOutcome:
     """Fetch a wallet's full history. Resumable: if a previous attempt was
     interrupted partway (crash, process kill), this continues from its last
@@ -38,6 +45,8 @@ def run_backfill(
 
     def checkpoint(cursor_ts: int) -> None:
         manager.checkpoint_backfill(session, address, cursor_ts=cursor_ts)
+        if on_progress is not None:
+            on_progress(cursor_ts)
 
     try:
         outcome = source.fetch_activity_range(
@@ -51,12 +60,20 @@ def run_backfill(
 
 
 def run_incremental(
-    session: Session, settings: Settings, raw_store: RawStore, source: DataApiSource, address: str
+    session: Session,
+    settings: Settings,
+    raw_store: RawStore,
+    source: DataApiSource,
+    address: str,
+    *,
+    on_progress: Callable[[int], None] | None = None,
 ) -> FetchOutcome:
     address = address.lower()
     state = manager.get_sync_state(session, address)
     if state is None or not state.backfill_complete:
-        return run_backfill(session, settings, raw_store, source, address)
+        return run_backfill(
+            session, settings, raw_store, source, address, on_progress=on_progress
+        )
 
     start_ts = (state.last_incremental_ts or 0) + 1
     now_ts = int(time.time())
@@ -64,7 +81,9 @@ def run_incremental(
         return FetchOutcome.empty()
 
     try:
-        outcome = source.fetch_activity_range(raw_store, address, start_ts, now_ts)
+        outcome = source.fetch_activity_range(
+            raw_store, address, start_ts, now_ts, on_progress=on_progress
+        )
     except Exception as exc:
         manager.record_failure(session, address, str(exc))
         raise

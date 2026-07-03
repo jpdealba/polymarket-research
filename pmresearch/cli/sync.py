@@ -28,7 +28,12 @@ def sync_backfill(address: str) -> None:
     raw_store = RawStore(settings, session)
     source = DataApiSource()
     try:
-        outcome = sync_runner.run_backfill(session, settings, raw_store, source, address)
+        def progress(cursor_ts: int) -> None:
+            click.echo(f"{address.lower()}: backfill_checkpoint cursor_ts={cursor_ts}")
+
+        outcome = sync_runner.run_backfill(
+            session, settings, raw_store, source, address, on_progress=progress
+        )
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
     finally:
@@ -52,7 +57,12 @@ def sync_incremental(address: str | None) -> None:
     try:
         addresses = [address.lower()] if address else [row.address for row in manager.list_wallets(session)]
         for addr in addresses:
-            outcome = sync_runner.run_incremental(session, settings, raw_store, source, addr)
+            def progress(cursor_ts: int, *, wallet: str = addr) -> None:
+                click.echo(f"{wallet}: sync_checkpoint cursor_ts={cursor_ts}")
+
+            outcome = sync_runner.run_incremental(
+                session, settings, raw_store, source, addr, on_progress=progress
+            )
             click.echo(f"{addr}: {outcome.rows_fetched} new rows ({outcome.requests_made} requests)")
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc

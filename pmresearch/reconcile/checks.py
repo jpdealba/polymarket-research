@@ -583,6 +583,9 @@ def realized_vs_oracle_fact(
         if timing_skew:
             reason = "timing_skew"
             notes["classification"] = "local_sync_or_oracle_timing_skew"
+        elif "RESOLUTION_SETTLEMENT" in event_types:
+            reason = "realized_pnl_resolution_settlement_drift"
+            notes["classification"] = "resolved_position_settled_without_observed_redeem"
         elif "REDEEM_PAYOUT" in event_types:
             reason = "realized_pnl_post_phase8_drift"
             notes["classification"] = "post_phase8_realized_pnl_drift"

@@ -1,13 +1,14 @@
 # Phase 8 PnL Definition Audit
 
-**Date:** 2026-07-03
+**Date:** 2026-07-03 (audit) / 2026-07-03 (fix implemented same day, see §10)
 **Wallet:** RN1 (`0x2005d16a84ceefa912d4e380cd32e7ff827875ea`)
-**Status:** Read-only audit — no code changes. All numbers below were computed by
-re-executing the exact `pnl_decomposition.py` algorithm directly against
-`data/db/pmresearch.db` (not estimated) and cross-checked to match the production
-`pnl_decomposition` table total to the penny ($13,030,374.379...). Anywhere a number
-could not be directly computed from the local DB, it is labeled **[unverified]** —
-do not treat those as confirmed.
+**Status:** §§1-9 are the original read-only audit (numbers computed by re-executing
+the exact `pnl_decomposition.py` algorithm directly against `data/db/pmresearch.db`,
+cross-checked to match the production `pnl_decomposition` table to the penny:
+$13,030,374.379...). §10 documents a follow-up fix that was implemented and run
+against RN1 after this audit — **the numbers in §§1-9 are the pre-fix baseline**,
+kept as-is for the historical record. Anywhere a number could not be directly
+computed from the local DB, it is labeled **[unverified]**.
 
 ---
 
@@ -349,3 +350,139 @@ requires Phase 9 marks to determine.
 | `tests/test_phase8_pnl.py` | Golden tests, incl. `test_merge_round_trip_decomposes_to_zero` cited in §4.1 |
 | `docs/evidence/RN1_CHECKPOINT.md` | RN1 research checkpoint, source of the headline numbers audited here |
 | `docs/plan/IMPLEMENTATION_PLAN.md` (Phase 8 section) | Stated goal: "complete, honest PnL — including cash flows the API reports as zero" |
+
+---
+
+## 10. Fix implemented: resolved-but-unclosed position recognition
+
+A Phase 9 run surfaced a follow-up to §6/§7.3: `daily_equity.unrealized_pnl` for RN1
+was **-$5,397,641.46** — nearly all of the $5.64M sitting in "open" positions was a
+loss, not unresolved uncertainty. Digging in: **12,344 of the 12,450 "open" tokens
+belonged to markets that had already resolved.** Their combined cost basis was
+$5,415,694.16; marked at the actual resolution price they were worth $18,914.47.
+Phase 8 never recognized this because `derive_redeem_payouts` only backfills a
+missing cash leg for an **observed** zero-valued REDEEM row — for these 12,344
+tokens, no REDEEM row of any kind existed. Nobody redeems a token worth $0 on-chain,
+and an unclaimed winner is just as possible; either way, the position stayed "open"
+forever with its cost basis intact.
+
+### 10.1 What was built
+
+A new derived event type, `RESOLUTION_SETTLEMENT` (`is_derived=1`, never
+source-observed, added to `KNOWN_EVENT_TYPES` in `ledger/model.py`), and a new
+function `derive_resolution_settlements` (`pmresearch/ingest/derived.py`). It
+replays TRADE/SPLIT/MERGE/REDEEM (mirroring `holdings.py`'s quantity semantics — a
+REDEEM always zeroes every outcome token of its condition, matching CTF redemption
+mechanics) to find each token's final quantity, then appends one deterministic
+settlement event per `(wallet, token)` where: quantity is above dust, the market has
+a known resolution price, and no observed REDEEM ever zeroed it.
+
+Unlike `REDEEM`/`REDEEM_PAYOUT` (condition-scoped, `token_id = NULL`, because the
+source gives no per-token attribution), `RESOLUTION_SETTLEMENT` is **token-scoped**
+— there's no source row forcing the condition-wide fan-out, and per-token
+attribution avoids replicating REDEEM's even-split-across-tokens quirk noted in §5.
+Idempotent via `dedupe_key = sha256(wallet|condition_id|token_id|RESOLUTION_SETTLEMENT)`.
+
+Wired into all four consumers with the smallest branch that matched each one's
+existing pattern for `REDEEM_PAYOUT`:
+- `holdings.py` — zeroes the specific token's position (task requirement: holdings
+  must reflect the settlement).
+- `episodes.py` — force-closes the episode, `close_reason = "resolution"`, recomputing
+  proceeds live from `resolution_prices` (matching `REDEEM_PAYOUT`'s existing pattern
+  rather than trusting the event's own stored `delta_usdc`).
+- `pnl_decomposition.py` — classified under **`redemption_pnl`** (no schema change;
+  adding a sixth column to `pnl_decomposition` would have required a migration and
+  touched every consumer of that table for a distinction that's economically the same
+  "position closes at resolution price" event REDEEM_PAYOUT already represents).
+- `daily_equity.py` — closes the position, moving its cost basis out of
+  `unrealized_pnl` and into `realized_pnl_cum`.
+- `reconcile/checks.py` — added a `RESOLUTION_SETTLEMENT`-aware classification branch
+  for `positions_realized_pnl` warnings, alongside the existing `REDEEM_PAYOUT` one.
+
+Six new tests added to `tests/test_phase8_pnl.py`: losing-token-no-REDEEM (realizes
+loss), winning-token-no-REDEEM (realizes payout), skip-when-REDEEM-already-closed,
+idempotency, unresolved-market-no-settlement, dust-holding-ignored. Full suite: **120
+→ 126 tests, all passing.**
+
+### 10.2 RN1 before/after
+
+Ran in order: `derive redeem-payouts` (unchanged, idempotent no-op — all 18,712
+zero-valued REDEEMs already had a REDEEM_PAYOUT from the original Phase 8 run) →
+`derive resolution-settlements` → `replay episodes` → `replay holdings` →
+`rebuild pnl_decomposition` → `rebuild daily_equity` → `reconcile run`.
+
+| Metric | Before | After |
+|---|---:|---:|
+| Nonzero holdings | 12,450 | **128** |
+| Open episodes | 12,450 | **128** |
+| Resolution-closed episodes | 120,962 | **133,310** |
+| Flat-closed episodes | 25,597 | 25,597 (unchanged) |
+| Resolved-but-open tokens found | — | 13,564 seen, 13,564 settled |
+| Cost basis in those tokens | $5,415,694.16 (my ad-hoc calc, §7.3) | $0 (settled) |
+| `directional_pnl` | $441,323.54 | $441,323.54 (unchanged) |
+| `bond_merge_pnl` | $5,544,232.17 | $5,544,232.17 (unchanged) |
+| `reward_income` | $292,423.97 | $292,423.97 (unchanged) |
+| `redemption_pnl` | $6,752,394.70 | **$1,364,656.83** |
+| Phase 8 `total_pnl` | $13,030,374.38 | **$7,642,636.51** |
+| Phase 9 `realized_pnl_cum` (latest) | $12,737,950.41 | **$7,350,212.54** |
+| Phase 9 `unrealized_pnl` (latest) | -$5,397,641.46 | **+$23,002.83** |
+| Phase 9 `portfolio_value` (latest) | $241,808.89 | $458,639.76 |
+| `/value` reconciliation | oracle ~$376.9k vs local $241.8k, diff ~$135k (user-reported, not independently captured pre-fix) | oracle=$332,370.17 vs local=$458,639.76, diff=$126,269.58, still `status=warn` |
+
+Only `directional_pnl`, `bond_merge_pnl`, and `reward_income` are unchanged — exactly
+as expected, since the fix only touches tokens that were never closed by TRADE/MERGE
+(those already flow through the untouched paths). `redemption_pnl` absorbs the full
+-$5,387,737.87 swing, and `unrealized_pnl` collapses from a $5.4M loss to near-zero,
+because the "loss" was never really unrealized uncertainty — it was already-decided
+economics (market resolved) that nothing had recognized yet.
+
+**`portfolio_value` went up, not down** ($241.8k → $458.6k) — this looks
+counterintuitive at first (removing 12,344 near-worthless positions should not
+*increase* the value of what's left). It reflects that `daily_equity.py` marks open
+positions using **last observed trade price**, not resolution price — before the fix,
+some of those 12,344 dead tokens were carrying stale, non-zero trade-price marks that
+diluted the aggregate; removing them changes the composition, and the ~106-128
+remaining genuinely-open positions are marked at current prices as of the fresh
+equity rebuild (which also picked up several months of price movement since the
+original Phase 9 run this session started from). This wasn't independently isolated
+further — flagging it here rather than asserting a cause I haven't verified.
+
+### 10.3 A real, disclosed side effect: `positions_size` reconciliation regressed
+
+Before the fix, `positions_size` (local holdings vs Polymarket's live `/positions`)
+passed 10,786/12,891 checks. After: **78/9,174**. Cause: Polymarket's `/positions`
+endpoint still lists 9,130 positions for RN1 — because those 12,344 tokens are
+**still physically sitting in the wallet on-chain**; resolving a market doesn't
+remove a token from a wallet, only an explicit on-chain redemption does, and per this
+whole audit, RN1 never sent one for these. Zeroing `holdings` for them (as the task
+explicitly required, so Phase 9 equity isn't overstated) means `holdings` no longer
+tracks "on-chain token balance" — it now tracks "economically active position." Those
+used to be the same thing; after this fix, they aren't for settled-but-unredeemed
+tokens.
+
+This is a real, expected consequence of doing what was asked, not a bug — but it
+means the `positions_size` check's implicit assumption ("local should track remote")
+no longer holds for this category, and it will keep firing warnings for every
+RESOLUTION_SETTLEMENT-affected token until addressed. **Not fixed in this pass**
+(out of scope — this touches reconciliation semantics, not PnL). Recommended
+follow-up: either give `positions_size` a `RESOLUTION_SETTLEMENT`-aware exception
+classification (mirroring what was just added for `positions_realized_pnl` in
+`reconcile/checks.py`), or track on-chain balance and economic position as two
+separate fields.
+
+### 10.4 Answering the WAC-vs-cashflow question directly
+
+The user asked whether the $13.03M vs. ~$10-11M gap was simply "one is cashflow, one
+is WAC." Post-fix, the honest answer is: **that framing undersold what was actually
+wrong.** The dominant mechanism (~$5.4M) was not an accounting-convention choice
+between cashflow and WAC — it was a straightforward completeness gap: real economic
+losses/gains that had already been decided by market resolution, sitting
+unrecognized because no closing event existed for them. Once recognized, Phase 8's
+`total_pnl` dropped to $7.64M — **below** the user's ~$10-11M UI estimate, not
+between it and $13.03M. So even after fixing the completeness gap, the "which
+definition matches the UI" question in §7 remains genuinely open, and the fee
+question (§7.1, $1.26M of worst-case sports fees still unrecognized) is now
+proportionally larger relative to a smaller base. **Do not re-close this gap by
+picking whichever combination lands closest to 10-11M** — the honest position is
+that $7.64M (realized, fee-blind) and the still-unresolved `/value` mark-quality gap
+(§10.3) are the two next concrete things to run down, not a cashflow-vs-WAC framing.

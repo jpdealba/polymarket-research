@@ -11,7 +11,7 @@ from sqlalchemy import text
 from ..config import ensure_data_dirs, get_settings
 from ..db.engine import get_session_factory
 from ..fees.estimate import compute_fee_estimates
-from ..ingest.runner import reparse_wallet, run_ingest
+from ..ingest.runner import reparse_wallet, run_ingest_with_progress
 from ..logging_setup import setup_logging
 
 SPORTS_FEE_CUTOFF_TS = 1774828800  # 2026-03-30T00:00:00Z
@@ -106,7 +106,10 @@ def _roi_on_buy_volume(totals: dict[str, Decimal]) -> Decimal | None:
 
 
 def _post_cutoff_fee_scenario(session, wallet: str | None) -> dict[str, Decimal | int]:
-    compute_fee_estimates(session, wallet=wallet)
+    def progress(processed: int, total: int) -> None:
+        click.echo(f"fee_estimates_progress={processed}/{total}", err=True)
+
+    compute_fee_estimates(session, wallet=wallet, on_progress=progress)
     query = (
         "SELECT fe.estimated_fee, fe.worst_case_fee "
         "FROM fee_estimates fe "
@@ -138,7 +141,13 @@ def ingest_run(wallet: str | None) -> None:
     setup_logging(settings)
     session = get_session_factory(settings)()
     try:
-        stats = run_ingest(session, wallet=wallet)
+        def progress(processed: int, total: int, seen: int, inserted: int) -> None:
+            click.echo(
+                f"ingest_progress={processed}/{total} events_seen={seen} "
+                f"events_inserted={inserted}"
+            )
+
+        stats = run_ingest_with_progress(session, wallet=wallet, on_progress=progress)
     finally:
         session.close()
     click.echo(
@@ -155,7 +164,15 @@ def ingest_reparse(wallet: str) -> None:
     setup_logging(settings)
     session = get_session_factory(settings)()
     try:
-        stats = reparse_wallet(session, wallet)
+        click.echo(f"reparse_start wallet={wallet.lower()}")
+
+        def progress(processed: int, total: int, seen: int, inserted: int) -> None:
+            click.echo(
+                f"reparse_progress={processed}/{total} events_seen={seen} "
+                f"events_inserted={inserted}"
+            )
+
+        stats = reparse_wallet(session, wallet, on_progress=progress)
     finally:
         session.close()
     click.echo(

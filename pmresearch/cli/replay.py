@@ -10,7 +10,7 @@ from ..config import ensure_data_dirs, get_settings
 from ..db.engine import get_session_factory
 from ..ledger.replay import ledger_wallets
 from ..logging_setup import setup_logging
-from ..projections.holdings import fetch_holdings, rebuild_holdings
+from ..projections.holdings import HoldingsProgress, fetch_holdings, rebuild_holdings
 from ..reports.holdings_dq import (
     missing_conditions_report,
     missing_token_metadata_report,
@@ -34,7 +34,13 @@ def replay_holdings(wallet: str | None) -> None:
     try:
         wallets = [wallet] if wallet else ledger_wallets(session)
         for w in wallets:
-            stats = rebuild_holdings(session, w, dust_epsilon=settings.dust_epsilon)
+            click.echo(f"{w.lower()}: starting holdings rebuild")
+            stats = rebuild_holdings(
+                session,
+                w,
+                dust_epsilon=settings.dust_epsilon,
+                on_progress=_emit_holdings_progress,
+            )
             click.echo(
                 f"{stats.wallet}: {stats.events_processed} events -> "
                 f"{stats.tokens_written} tokens ({stats.nonzero_tokens} nonzero), "
@@ -49,6 +55,21 @@ def replay_holdings(wallet: str | None) -> None:
                 )
     finally:
         session.close()
+
+
+def _emit_holdings_progress(progress: HoldingsProgress) -> None:
+    if progress.stage == "start":
+        click.echo(f"  start: events_total={progress.events_total}")
+    elif progress.stage == "events":
+        click.echo(
+            f"  events: {progress.events_processed}/{progress.events_total} "
+            f"ts={progress.current_ts}"
+        )
+    elif progress.stage == "insert_flush":
+        click.echo(
+            f"  flush holdings: rows={progress.rows_written} "
+            f"events={progress.events_processed}/{progress.events_total}"
+        )
 
 
 @click.group("holdings")

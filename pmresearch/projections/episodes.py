@@ -15,7 +15,7 @@ import json
 from dataclasses import dataclass, field
 from decimal import Decimal
 from statistics import median
-from typing import Optional
+from typing import Callable, Optional
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -38,6 +38,8 @@ _INSERT_SQL = text(
     ":reward_income, :fees_paid, :events_consumed, :projection_version)"
 )
 
+_COUNT_SQL = text("SELECT COUNT(*) AS event_count FROM wallet_events WHERE wallet = :wallet")
+
 
 @dataclass(frozen=True)
 class EpisodesRebuildStats:
@@ -51,6 +53,16 @@ class EpisodesRebuildStats:
     unmapped_condition_events: int
     unmapped_condition_ids: int
     as_of_ts: int
+
+
+@dataclass(frozen=True)
+class EpisodesProgress:
+    wallet: str
+    stage: str
+    events_processed: int
+    events_total: int
+    rows_written: int
+    current_ts: int | None = None
 
 
 @dataclass(frozen=True)
@@ -208,7 +220,13 @@ def _row(episode: _Episode, close_ts: Optional[int], close_reason: str) -> dict:
 
 
 def rebuild_episodes(
-    session: Session, wallet: str, *, dust_epsilon: Decimal = Decimal("0.000001")
+    session: Session,
+    wallet: str,
+    *,
+    dust_epsilon: Decimal = Decimal("0.000001"),
+    on_progress: Callable[[EpisodesProgress], None] | None = None,
+    event_progress_interval: int = 100000,
+    insert_batch_size: int = 5000,
 ) -> EpisodesRebuildStats:
     """Drop and rebuild flat-to-flat episodes for one wallet from the ledger."""
     wallet = wallet.lower()
@@ -218,11 +236,51 @@ def rebuild_episodes(
 
     active: dict[str, _Episode] = {}
     rows: list[dict] = []
+    rows_written = 0
+    open_count = 0
+    flat_count = 0
+    resolution_count = 0
+    events_total = int(session.execute(_COUNT_SQL, {"wallet": wallet}).scalar_one() or 0)
     events_processed = 0
     event_applications = 0
     unmapped_condition_events = 0
     unmapped_conditions: set[str] = set()
     max_ts = 0
+
+    session.execute(text("DELETE FROM episodes WHERE wallet = :w"), {"w": wallet})
+    session.commit()
+    _emit_progress(on_progress, wallet, "start", 0, events_total, 0, None)
+
+    def flush_rows() -> None:
+        nonlocal rows_written
+        if not rows:
+            return
+        session.execute(_INSERT_SQL, rows)
+        session.commit()
+        rows_written += len(rows)
+        rows.clear()
+        _emit_progress(
+            on_progress,
+            wallet,
+            "insert_flush",
+            events_processed,
+            events_total,
+            rows_written,
+            max_ts,
+        )
+
+    def append_row(row: dict) -> None:
+        nonlocal open_count, flat_count, resolution_count
+        rows.append(row)
+        reason = row["close_reason"]
+        if reason == "open":
+            open_count += 1
+        elif reason == "flat":
+            flat_count += 1
+        elif reason == "resolution":
+            resolution_count += 1
+        if len(rows) >= insert_batch_size:
+            flush_rows()
 
     def get_episode(token_id: str, condition_id: Optional[str], ts: int) -> tuple[_Episode, bool]:
         episode = active.get(token_id)
@@ -239,7 +297,7 @@ def rebuild_episodes(
 
     def close(token_id: str, ts: int, reason: str) -> None:
         episode = active.pop(token_id)
-        rows.append(_row(episode, ts, reason))
+        append_row(_row(episode, ts, reason))
 
     def apply_add(token_id: str, condition_id: Optional[str], ts: int, event_id: int, shares: Decimal, cost: Decimal) -> None:
         nonlocal event_applications
@@ -282,6 +340,16 @@ def rebuild_episodes(
         ts = event.ts
         if ts > max_ts:
             max_ts = ts
+        if event_progress_interval > 0 and events_processed % event_progress_interval == 0:
+            _emit_progress(
+                on_progress,
+                wallet,
+                "events",
+                events_processed,
+                events_total,
+                rows_written,
+                ts,
+            )
 
         etype = event.event_type
         if etype == "TRADE":
@@ -370,6 +438,27 @@ def rebuild_episodes(
                         force_close=True,
                     )
 
+        elif etype == "RESOLUTION_SETTLEMENT":
+            # Token-scoped (unlike REDEEM/REDEEM_PAYOUT's condition fanout):
+            # closes a resolved position the source never sent a REDEEM for.
+            if event.token_id is None:
+                continue
+            episode = active.get(event.token_id)
+            if episode is None:
+                continue
+            prices = resolution_prices.get(event.condition_id or "", {})
+            proceeds = episode.qty * prices.get(event.token_id, _ZERO)
+            apply_remove(
+                event.token_id,
+                event.condition_id,
+                ts,
+                event.id,
+                episode.qty,
+                proceeds,
+                reason="resolution",
+                force_close=True,
+            )
+
         elif etype in ("REWARD", "MAKER_REBATE", "TAKER_REBATE"):
             if event.token_id and event.token_id in active:
                 active[event.token_id].reward_income += Decimal(event.delta_usdc)
@@ -377,24 +466,43 @@ def rebuild_episodes(
                 event_applications += 1
 
     for token_id in sorted(active):
-        rows.append(_row(active[token_id], None, "open"))
-
-    session.execute(text("DELETE FROM episodes WHERE wallet = :w"), {"w": wallet})
-    for start in range(0, len(rows), 5000):
-        session.execute(_INSERT_SQL, rows[start : start + 5000])
-    session.commit()
+        append_row(_row(active[token_id], None, "open"))
+    flush_rows()
 
     return EpisodesRebuildStats(
         wallet=wallet,
         events_processed=events_processed,
-        episodes_written=len(rows),
-        open_episodes=sum(1 for row in rows if row["close_reason"] == "open"),
-        flat_closed_episodes=sum(1 for row in rows if row["close_reason"] == "flat"),
-        resolution_closed_episodes=sum(1 for row in rows if row["close_reason"] == "resolution"),
+        episodes_written=rows_written,
+        open_episodes=open_count,
+        flat_closed_episodes=flat_count,
+        resolution_closed_episodes=resolution_count,
         event_applications_consumed=event_applications,
         unmapped_condition_events=unmapped_condition_events,
         unmapped_condition_ids=len(unmapped_conditions),
         as_of_ts=max_ts,
+    )
+
+
+def _emit_progress(
+    on_progress: Callable[[EpisodesProgress], None] | None,
+    wallet: str,
+    stage: str,
+    events_processed: int,
+    events_total: int,
+    rows_written: int,
+    current_ts: int | None,
+) -> None:
+    if on_progress is None:
+        return
+    on_progress(
+        EpisodesProgress(
+            wallet=wallet,
+            stage=stage,
+            events_processed=events_processed,
+            events_total=events_total,
+            rows_written=rows_written,
+            current_ts=current_ts,
+        )
     )
 
 

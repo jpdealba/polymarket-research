@@ -29,6 +29,19 @@ Sign conventions (delta_shares / delta_usdc), applied in pmresearch.ingest.activ
       token_id is NULL: the source gives no per-token attribution for REDEEM
       (only conditionId), and Phase 2 does not guess which token it was.
 
+  RESOLUTION_SETTLEMENT (derived, is_derived=1, never source-observed)
+      = -remaining_qty / +(remaining_qty * resolution_price)
+      Some resolved markets never produce any REDEEM row at all for a given
+      wallet/token — nobody bothers to redeem a token worth $0 on-chain, and
+      an unclaimed winning balance is just as possible. Left alone, that
+      holding stays "open" forever with its cost basis intact. Phase 8
+      appends one deterministic RESOLUTION_SETTLEMENT event per
+      (wallet, token) in that state once the market resolves, distinct from
+      REDEEM_PAYOUT (which only fills in the missing cash leg of an
+      *observed*, zero-valued REDEEM row). Token-scoped (token_id is set,
+      unlike MERGE/SPLIT/REDEEM) since there is no source row to inherit the
+      per-condition-only attribution from.
+
   Anything else — TRANSFER included, plus types the source reports that
   aren't in this documented set at all (e.g. MAKER_REBATE, CONVERSION,
   observed live against RN1 but not part of the frozen design's enum) — gets
@@ -57,6 +70,7 @@ KNOWN_EVENT_TYPES = {
     "SPLIT",
     "REDEEM",
     "REDEEM_PAYOUT",
+    "RESOLUTION_SETTLEMENT",
     "REWARD",
     "MAKER_REBATE",
     "TAKER_REBATE",

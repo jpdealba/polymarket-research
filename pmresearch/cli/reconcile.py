@@ -11,6 +11,7 @@ from ..db.engine import get_session_factory
 from ..logging_setup import setup_logging
 from ..reconcile.checks import decimal_string
 from ..reconcile.runner import (
+    ReconciliationProgress,
     latest_reconciliation_result,
     run_reconciliation,
     trust_dict,
@@ -32,7 +33,12 @@ def reconcile_run(wallet: str, as_json: bool) -> None:
     setup_logging(settings)
     session = get_session_factory(settings)()
     try:
-        result, trust = run_reconciliation(session, settings, wallet=wallet)
+        result, trust = run_reconciliation(
+            session,
+            settings,
+            wallet=wallet,
+            on_progress=None if as_json else _emit_reconcile_progress,
+        )
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
     finally:
@@ -229,3 +235,22 @@ def _emit_value_check(result) -> None:
         f"reason={fact.reason_code} equity_date={notes.get('equity_date')} "
         f"stale_equity_share={notes.get('stale_equity_share')}"
     )
+
+
+def _emit_reconcile_progress(progress: ReconciliationProgress) -> None:
+    if progress.stage == "fetch_positions_start":
+        click.echo(f"{progress.wallet}: fetch /positions start")
+    elif progress.stage == "fetch_positions_page":
+        click.echo(
+            f"{progress.wallet}: fetch /positions parsed={progress.processed} "
+            f"requested_rows={progress.total}"
+        )
+    elif progress.stage == "build_checks_start":
+        click.echo(f"{progress.wallet}: build checks remote_positions={progress.processed}")
+    elif progress.stage == "facts_flush":
+        click.echo(
+            f"{progress.wallet}: flush reconciliation_facts="
+            f"{progress.processed}/{progress.total}"
+        )
+    elif progress.stage == "complete":
+        click.echo(f"{progress.wallet}: reconciliation complete facts={progress.processed}")

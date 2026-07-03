@@ -167,13 +167,26 @@ def test_daily_equity_golden_fixture_with_stale_share(session):
         ("tok_b", _ts(day2)): ("0.1", True, 90_000),
     }
     service = MarkService([StaticMarkSource(marks)])
+    progress = []
 
     stats = rebuild_daily_equity(
-        session, wallet, mark_service=service, dust_epsilon=DUST, through_date=day2
+        session,
+        wallet,
+        mark_service=service,
+        dust_epsilon=DUST,
+        through_date=day2,
+        progress_fn=progress.append,
+        equity_batch_size=1,
+        mark_batch_size=1,
+        event_progress_interval=1,
     )
     rows = fetch_daily_equity(session, wallet)
+    stages = [item.stage for item in progress]
 
     assert stats.rows_written == 2
+    assert "events" in stages
+    assert "marks_flush" in stages
+    assert "equity_flush" in stages
     assert [row.date for row in rows] == ["2026-01-01", "2026-01-02"]
     assert rows[0].portfolio_value == Decimal("6.0")
     assert rows[0].unrealized_pnl == Decimal("1.0")

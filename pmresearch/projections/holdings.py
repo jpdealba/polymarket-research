@@ -39,7 +39,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Optional
+from typing import Callable, Optional
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -62,6 +62,8 @@ _INSERT_SQL = text(
     "VALUES (:wallet, :token_id, :qty, :wac_cost, :as_of_ts, :projection_version)"
 )
 
+_COUNT_SQL = text("SELECT COUNT(*) AS event_count FROM wallet_events WHERE wallet = :wallet")
+
 
 @dataclass(frozen=True)
 class HoldingsRebuildStats:
@@ -74,6 +76,16 @@ class HoldingsRebuildStats:
     unmapped_condition_events: int
     unmapped_condition_ids: int
     as_of_ts: int
+
+
+@dataclass(frozen=True)
+class HoldingsProgress:
+    wallet: str
+    stage: str
+    events_processed: int
+    events_total: int
+    rows_written: int
+    current_ts: int | None = None
 
 
 class _Position:
@@ -116,19 +128,27 @@ def _load_condition_tokens(session: Session) -> dict[str, list[str]]:
 
 
 def rebuild_holdings(
-    session: Session, wallet: str, *, dust_epsilon: Decimal = Decimal("0.000001")
+    session: Session,
+    wallet: str,
+    *,
+    dust_epsilon: Decimal = Decimal("0.000001"),
+    on_progress: Callable[[HoldingsProgress], None] | None = None,
+    event_progress_interval: int = 100000,
+    insert_batch_size: int = 5000,
 ) -> HoldingsRebuildStats:
     """Drop and rebuild the holdings rows for one wallet from its ledger."""
     wallet = wallet.lower()
     condition_tokens = _load_condition_tokens(session)
 
     positions: dict[str, _Position] = {}
+    events_total = int(session.execute(_COUNT_SQL, {"wallet": wallet}).scalar_one() or 0)
     events_processed = 0
     negative_qty_events = 0
     negative_tokens_seen: set[str] = set()
     unmapped_condition_events = 0
     unmapped_conditions: set[str] = set()
     max_ts = 0
+    _emit_progress(on_progress, wallet, "start", 0, events_total, 0, None)
 
     def position(token_id: str) -> _Position:
         pos = positions.get(token_id)
@@ -158,6 +178,10 @@ def rebuild_holdings(
         ts = event.ts
         if ts > max_ts:
             max_ts = ts
+        if event_progress_interval > 0 and events_processed % event_progress_interval == 0:
+            _emit_progress(
+                on_progress, wallet, "events", events_processed, events_total, 0, ts
+            )
 
         if etype == "TRADE":
             if event.token_id is None:
@@ -205,6 +229,16 @@ def rebuild_holdings(
                     pos.add(size, cost_per_token)
                     pos.as_of_ts = ts
 
+        elif etype == "RESOLUTION_SETTLEMENT":
+            # Token-scoped: closes a resolved position no REDEEM ever
+            # touched (unlike MERGE/SPLIT/REDEEM, there is exactly one token
+            # to zero here, not a condition-wide fanout).
+            if event.token_id is not None:
+                pos = positions.get(event.token_id)
+                if pos is not None:
+                    pos.zero()
+                    pos.as_of_ts = ts
+
         # REWARD / rebates / unknown types: no quantity effect.
 
     if unmapped_conditions:
@@ -248,10 +282,24 @@ def rebuild_holdings(
             wallet,
         )
 
-    session.execute(text("DELETE FROM holdings WHERE wallet = :w"), {"w": wallet})
-    for start in range(0, len(rows), 5000):
-        session.execute(_INSERT_SQL, rows[start : start + 5000])
     session.commit()
+    session.execute(text("DELETE FROM holdings WHERE wallet = :w"), {"w": wallet})
+    session.commit()
+    rows_written = 0
+    for start in range(0, len(rows), insert_batch_size):
+        batch = rows[start : start + insert_batch_size]
+        session.execute(_INSERT_SQL, batch)
+        session.commit()
+        rows_written += len(batch)
+        _emit_progress(
+            on_progress,
+            wallet,
+            "insert_flush",
+            events_processed,
+            events_total,
+            rows_written,
+            max_ts,
+        )
 
     return HoldingsRebuildStats(
         wallet=wallet,
@@ -263,6 +311,29 @@ def rebuild_holdings(
         unmapped_condition_events=unmapped_condition_events,
         unmapped_condition_ids=len(unmapped_conditions),
         as_of_ts=max_ts,
+    )
+
+
+def _emit_progress(
+    on_progress: Callable[[HoldingsProgress], None] | None,
+    wallet: str,
+    stage: str,
+    events_processed: int,
+    events_total: int,
+    rows_written: int,
+    current_ts: int | None,
+) -> None:
+    if on_progress is None:
+        return
+    on_progress(
+        HoldingsProgress(
+            wallet=wallet,
+            stage=stage,
+            events_processed=events_processed,
+            events_total=events_total,
+            rows_written=rows_written,
+            current_ts=current_ts,
+        )
     )
 
 

@@ -6,10 +6,15 @@ import click
 
 from ..config import ensure_data_dirs, get_settings
 from ..db.engine import get_session_factory
-from ..ingest.derived import derive_redeem_payouts
+from ..ingest.derived import (
+    DeriveProgress,
+    derive_redeem_payouts,
+    derive_resolution_settlements,
+)
 from ..ledger.replay import ledger_wallets
-from ..projections.episodes import rebuild_episodes
+from ..projections.episodes import EpisodesProgress, rebuild_episodes
 from ..projections.pnl_decomposition import (
+    PnlProgress,
     fetch_pnl_decomposition,
     rebuild_pnl_decomposition,
 )
@@ -30,9 +35,39 @@ def derive_run(wallet: str | None) -> None:
     try:
         wallets = [wallet.lower()] if wallet else ledger_wallets(session)
         for w in wallets:
-            stats = derive_redeem_payouts(session, w, dust_epsilon=settings.dust_epsilon)
-            episode_stats = rebuild_episodes(session, w, dust_epsilon=settings.dust_epsilon)
-            pnl_stats = rebuild_pnl_decomposition(session, w, dust_epsilon=settings.dust_epsilon)
+            click.echo(f"{w}: starting derive")
+            stats = derive_redeem_payouts(
+                session,
+                w,
+                dust_epsilon=settings.dust_epsilon,
+                on_progress=_emit_derive_progress,
+            )
+            click.echo(f"{w}: deriving resolution settlements")
+            settlement_stats = derive_resolution_settlements(
+                session,
+                w,
+                dust_epsilon=settings.dust_epsilon,
+                on_progress=_emit_derive_progress,
+            )
+            click.echo(
+                f"{w}: resolved_open_tokens_seen={settlement_stats.resolved_open_tokens_seen} "
+                f"settlements_inserted={settlement_stats.derived_events_inserted} "
+                f"dust_skipped={settlement_stats.dust_skipped}"
+            )
+            click.echo(f"{w}: rebuilding episodes after derive")
+            episode_stats = rebuild_episodes(
+                session,
+                w,
+                dust_epsilon=settings.dust_epsilon,
+                on_progress=_emit_episode_progress,
+            )
+            click.echo(f"{w}: rebuilding PnL decomposition")
+            pnl_stats = rebuild_pnl_decomposition(
+                session,
+                w,
+                dust_epsilon=settings.dust_epsilon,
+                on_progress=_emit_pnl_progress,
+            )
             click.echo(
                 f"{stats.wallet}: zero_redeems={stats.zero_redeems_seen} "
                 f"derived_inserted={stats.derived_events_inserted} "
@@ -46,6 +81,51 @@ def derive_run(wallet: str | None) -> None:
             )
     finally:
         session.close()
+
+
+def _emit_derive_progress(progress: DeriveProgress) -> None:
+    if progress.stage == "start":
+        click.echo(f"  derive start: events_total={progress.events_total}")
+    elif progress.stage == "events":
+        click.echo(
+            f"  derive events: {progress.events_processed}/{progress.events_total} "
+            f"ts={progress.current_ts} inserted={progress.derived_inserted}"
+        )
+    elif progress.stage == "insert_flush":
+        click.echo(
+            f"  flush derived: inserted={progress.derived_inserted} "
+            f"events={progress.events_processed}/{progress.events_total}"
+        )
+
+
+def _emit_episode_progress(progress: EpisodesProgress) -> None:
+    if progress.stage == "start":
+        click.echo(f"  episodes start: events_total={progress.events_total}")
+    elif progress.stage == "events":
+        click.echo(
+            f"  episodes events: {progress.events_processed}/{progress.events_total} "
+            f"ts={progress.current_ts} rows={progress.rows_written}"
+        )
+    elif progress.stage == "insert_flush":
+        click.echo(
+            f"  flush episodes: rows={progress.rows_written} "
+            f"events={progress.events_processed}/{progress.events_total}"
+        )
+
+
+def _emit_pnl_progress(progress: PnlProgress) -> None:
+    if progress.stage == "start":
+        click.echo(f"  pnl start: events_total={progress.events_total}")
+    elif progress.stage == "events":
+        click.echo(
+            f"  pnl events: {progress.events_processed}/{progress.events_total} "
+            f"ts={progress.current_ts}"
+        )
+    elif progress.stage == "insert_flush":
+        click.echo(
+            f"  flush pnl_decomposition: rows={progress.rows_written} "
+            f"events={progress.events_processed}/{progress.events_total}"
+        )
 
 
 @click.group("pnl")

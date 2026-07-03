@@ -166,7 +166,10 @@ def fees_report(wallet: str, by_category: bool, pre_post_sports_fee: bool) -> No
     session = get_session_factory(settings)()
     try:
         try:
-            compute_fee_estimates(session, wallet=wallet)
+            def progress(processed: int, total: int) -> None:
+                click.echo(f"fee_estimates_progress={processed}/{total}", err=True)
+
+            compute_fee_estimates(session, wallet=wallet, on_progress=progress)
             rows = fee_attribution_report(
                 session,
                 wallet=wallet,
