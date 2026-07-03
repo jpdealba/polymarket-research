@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 import httpx
 
@@ -91,19 +91,79 @@ class DataApiSource:
         self.close()
 
     def fetch_activity_range(
-        self, raw_store: RawStore, wallet: str, start_ts: int, end_ts: int
+        self,
+        raw_store: RawStore,
+        wallet: str,
+        start_ts: int,
+        end_ts: int,
+        *,
+        on_progress: Optional[Callable[[int], None]] = None,
     ) -> FetchOutcome:
         """Fetch every `/activity` row for `wallet` within [start_ts, end_ts]
-        (both inclusive), splitting on the offset cap as needed. Returns
-        aggregate stats; every page fetched is persisted to the Raw Store."""
-        return self._fetch_window(raw_store, wallet, start_ts, end_ts)
+        (both inclusive), narrowing the window on the offset cap as needed.
+        Returns aggregate stats; every page fetched is persisted to the Raw
+        Store.
 
-    def _fetch_window(
-        self, raw_store: RawStore, wallet: str, start_ts: int, end_ts: int
-    ) -> FetchOutcome:
+        Implemented as an outer loop, not recursion: a wallet's full history
+        can require narrowing the window hundreds of times (observed against
+        a very high-frequency real wallet — recursion blew Python's stack
+        after ~60 narrowings on ~30 min of continuous activity), so the
+        number of narrowing steps must not grow the call stack.
+
+        If given, `on_progress(cursor_ts)` is called after each narrowing
+        with "everything from cursor_ts to end_ts is now covered" — callers
+        doing a long-running backfill use this to checkpoint resumable
+        progress (see pmresearch.walletmanager.sync.run_backfill), so an
+        interrupted run doesn't have to re-walk history it already covered.
+        """
         if start_ts > end_ts:
             return FetchOutcome.empty()
 
+        total = FetchOutcome.empty()
+        window_end = end_ts
+
+        while True:
+            window_outcome, capped = self._page_window(raw_store, wallet, start_ts, window_end)
+            total = total.merge(window_outcome)
+
+            if not capped:
+                if on_progress is not None:
+                    on_progress(start_ts)
+                return total  # [start_ts, window_end] fully paged — and by
+                # induction everything newer than window_end was already
+                # covered by prior iterations, so [start_ts, end_ts] is done.
+
+            cursor_ts = window_outcome.min_ts
+            if cursor_ts is None or cursor_ts >= window_end:
+                # No progress narrowing the window (either nothing was
+                # fetched before the cap, or every row so far shares
+                # window_end) — looping again would repeat forever.
+                logger.warning(
+                    "Wallet %s: activity offset cap reached without being able "
+                    "to narrow the time window further (window=[%d, %d], "
+                    "cursor=%s); truncating — some events may be missing from "
+                    "the raw store.",
+                    wallet,
+                    start_ts,
+                    window_end,
+                    cursor_ts,
+                )
+                return total
+
+            # Anything strictly newer than cursor_ts is fully covered;
+            # continue with a window ending at cursor_ts (inclusive, so any
+            # other same-second rows we might not have reached yet are
+            # re-fetched — the only bounded overlap this algorithm produces).
+            window_end = cursor_ts
+            if on_progress is not None:
+                on_progress(window_end)
+
+    def _page_window(
+        self, raw_store: RawStore, wallet: str, start_ts: int, end_ts: int
+    ) -> tuple[FetchOutcome, bool]:
+        """Page [start_ts, end_ts] until exhausted or the offset cap is hit.
+        Returns (outcome, capped) — capped=True means the caller should
+        narrow the window and call this again."""
         outcome = FetchOutcome.empty()
         offset = 0
         while True:
@@ -118,9 +178,7 @@ class DataApiSource:
             response, payload = self._adapter.get_json("/activity", params)
 
             if _is_offset_cap_error(response, payload):
-                return outcome.merge(
-                    self._continue_from_cursor(raw_store, wallet, start_ts, end_ts, outcome.min_ts)
-                )
+                return outcome, True
             response.raise_for_status()
 
             rows = payload or []
@@ -143,41 +201,10 @@ class DataApiSource:
             outcome = outcome.merge(page_outcome)
 
             if len(rows) < PAGE_LIMIT:
-                return outcome  # last page of this window
+                return outcome, False  # last page of this window
 
             offset += PAGE_LIMIT
             if offset > MAX_OFFSET:
                 # Reached the cap without exhausting the window: there may be
                 # more rows than we can reach by paging further.
-                return outcome.merge(
-                    self._continue_from_cursor(raw_store, wallet, start_ts, end_ts, outcome.min_ts)
-                )
-
-    def _continue_from_cursor(
-        self,
-        raw_store: RawStore,
-        wallet: str,
-        start_ts: int,
-        end_ts: int,
-        cursor_ts: Optional[int],
-    ) -> FetchOutcome:
-        """Called when the offset cap was hit while paging [start_ts, end_ts].
-        `cursor_ts` is the oldest timestamp seen so far in that window
-        (min_ts across all pages fetched before the cap). Anything strictly
-        newer than cursor_ts is fully covered; continue with [start_ts,
-        cursor_ts] to pick up whatever else shares that boundary second."""
-        if cursor_ts is None or cursor_ts >= end_ts:
-            # No progress was made narrowing the window (either nothing was
-            # fetched before the cap, or every row so far shares end_ts) —
-            # recursing would repeat the same window forever.
-            logger.warning(
-                "Wallet %s: activity offset cap reached without being able to "
-                "narrow the time window further (window=[%d, %d], cursor=%s); "
-                "truncating — some events may be missing from the raw store.",
-                wallet,
-                start_ts,
-                end_ts,
-                cursor_ts,
-            )
-            return FetchOutcome.empty()
-        return self._fetch_window(raw_store, wallet, start_ts, cursor_ts)
+                return outcome, True

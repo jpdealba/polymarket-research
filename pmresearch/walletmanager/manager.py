@@ -156,10 +156,35 @@ def is_stale(session: Session, address: str, *, cadence_s: int, stale_multiplier
     return age > cadence_s * stale_multiplier
 
 
-def start_backfill(session: Session, address: str) -> None:
+def start_backfill(session: Session, address: str, *, high_bound: Optional[int] = None) -> None:
+    """Mark backfill in progress. Pass `high_bound` when starting a fresh
+    (non-resumed) attempt: it's persisted as last_incremental_ts immediately,
+    so that if this attempt is interrupted, a later retry knows the original
+    upper bound to preserve rather than starting over from a new "now" — see
+    checkpoint_backfill."""
+    address = address.lower()
+    if high_bound is not None:
+        session.execute(
+            text(
+                "UPDATE sync_state SET status = 'backfilling', last_incremental_ts = :h, "
+                "backfill_cursor_ts = NULL WHERE wallet = :a"
+            ),
+            {"a": address, "h": high_bound},
+        )
+    else:
+        session.execute(
+            text("UPDATE sync_state SET status = 'backfilling' WHERE wallet = :a"),
+            {"a": address},
+        )
+    session.commit()
+
+
+def checkpoint_backfill(session: Session, address: str, *, cursor_ts: int) -> None:
+    """Record how far a backfill has walked back so far. On interruption, a
+    retry resumes from here instead of re-walking already-covered history."""
     session.execute(
-        text("UPDATE sync_state SET status = 'backfilling' WHERE wallet = :a"),
-        {"a": address.lower()},
+        text("UPDATE sync_state SET backfill_cursor_ts = :c WHERE wallet = :a"),
+        {"a": address.lower(), "c": cursor_ts},
     )
     session.commit()
 
