@@ -1,0 +1,7 @@
+Tokens tracked:      50
+Snapshots total:     50
+With raw ref:        50
+Raw fetches (clob):  50
+Oldest snapshot:     2026-07-04T11:03:49+00:00
+Newest snapshot:     2026-07-04T11:04:02+00:00
+Raw storage:         14.1 KB
