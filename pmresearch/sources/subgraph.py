@@ -91,6 +91,17 @@ def resolve_traded(
     return str(maker_asset_id), maker_amount
 
 
+def resolve_collateral_amount(
+    maker_asset_id: int, taker_asset_id: int, maker_amount: int, taker_amount: int
+) -> int:
+    """Return the raw 6-decimal USDC side of the fill."""
+    if maker_asset_id == 0:
+        return maker_amount
+    if taker_asset_id == 0:
+        return taker_amount
+    return 0
+
+
 @dataclass(frozen=True)
 class OrderFill:
     order_hash: str
@@ -128,6 +139,16 @@ class OrderFill:
     @property
     def fee_decimal(self) -> Decimal:
         return to_shares(self.fee)
+
+    @property
+    def collateral_usdc(self) -> Decimal:
+        raw = resolve_collateral_amount(
+            self.maker_asset_id,
+            self.taker_asset_id,
+            self.maker_amount_filled,
+            self.taker_amount_filled,
+        )
+        return to_shares(raw)
 
 
 @dataclass(frozen=True)

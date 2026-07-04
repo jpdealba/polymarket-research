@@ -16,6 +16,7 @@ Todos los comandos aceptan `--help` para ver la ayuda integrada.
 | `PMR_LOG_LEVEL` | `INFO` | Nivel de logging Python (DEBUG, INFO, WARNING, ERROR). |
 | `PMR_RPC_URL` | vacio | URL JSON-RPC de Polygon para enriquecimiento por RPC (Fase 11). Vacio = RPC apagado; solo funciona subgraph. |
 | `PMR_SUBGRAPH_URL` | vacio | Endpoint del subgraph de Goldsky (Fase 11). Vacio = subgraph deshabilitado; `pmr enrich run --source subgraph` da error. |
+| `PMR_POLYGONSCAN_API_KEY` | vacio | API key gratis de Etherscan/PolygonScan V2 para enriquecimiento por logs paginados. Vacio = `--source polygonscan` deshabilitado. |
 | `PMR_RCLONE_REMOTE` | vacio | Remote de rclone para sync de backups a almacenamiento externo. Vacio = sin sync remoto. |
 | `PMR_DUST_EPSILON` | `0.000001` | Umbral de dust: holdings con |qty| <= epsilon se consideran planos (flat). |
 | `PMR_BACKUP_RETAIN` | `14` | Cantidad de backups a conservar en `ops/backup.sh`. Los mas viejos se eliminan. |
@@ -141,7 +142,7 @@ Todos los comandos aceptan `--help` para ver la ayuda integrada.
 
 | Comando | Parametros | Que hace |
 | --- | --- | --- |
-| `pmr enrich run` | `--wallet TEXT` (opcional); `--source [subgraph\|rpc]` (default `subgraph`); `--from-block INT` (default `0`); `--to-block INT` (opcional); `--chunk-blocks INT` (default `200000`) | Trae fills OrderFilled y los une a TRADE por (tx_hash, wallet, token, monto). RPC requiere `PMR_RPC_URL`. `--chunk-blocks` = rango por llamada eth_getLogs. |
+| `pmr enrich run` | `--wallet TEXT` (opcional); `--source [subgraph\|rpc\|polygonscan]` (default `subgraph`); `--from-block INT` (default `0`); `--to-block INT` (opcional); `--chunk-blocks INT` (default `200000`); `--ignore-watermark` | Trae fills OrderFilled y los une a TRADE por (tx_hash, wallet, token, monto). RPC requiere `PMR_RPC_URL`; PolygonScan requiere `PMR_POLYGONSCAN_API_KEY`. `--chunk-blocks` = rango por fetch; PolygonScan pagina por resultados dentro del rango. `--ignore-watermark` fuerza reescaneo desde `--from-block`. |
 | `pmr enrich coverage` | `--wallet TEXT` (opcional) | Muestra cobertura de enrichment: enriched / pending / ambiguous / missing por bucket de recencia. |
 
 ### reconcile

@@ -58,6 +58,7 @@ class EnrichmentStats:
 class _Candidate:
     event_id: int
     abs_shares: Decimal
+    abs_usdc: Decimal
 
 
 def _trade_candidates(
@@ -65,13 +66,27 @@ def _trade_candidates(
 ) -> list[_Candidate]:
     rows = session.execute(
         text(
-            "SELECT id, delta_shares FROM wallet_events "
+            "SELECT id, delta_shares, delta_usdc, usdc_size FROM wallet_events "
             "WHERE wallet = :wallet AND event_type = 'TRADE' "
             "AND lower(tx_hash) = :tx AND token_id = :token"
         ),
         {"wallet": wallet.lower(), "tx": tx_hash.lower(), "token": token_id},
     ).fetchall()
-    return [_Candidate(row.id, abs(Decimal(row.delta_shares))) for row in rows]
+    return [
+        _Candidate(
+            row.id,
+            abs(Decimal(row.delta_shares)),
+            _ledger_abs_usdc(row.delta_usdc, row.usdc_size),
+        )
+        for row in rows
+    ]
+
+
+def _ledger_abs_usdc(delta_usdc: object, usdc_size: object) -> Decimal:
+    size = abs(Decimal(str(usdc_size or "0")))
+    if size != 0:
+        return size
+    return abs(Decimal(str(delta_usdc or "0")))
 
 
 def _enriched_set(session: Session, event_ids: list[int]) -> set[int]:
@@ -86,13 +101,23 @@ def _enriched_set(session: Session, event_ids: list[int]) -> set[int]:
     return {r.event_id for r in rows}
 
 
-def _match(candidates: list[_Candidate], fill_shares: Decimal) -> tuple[Optional[int], bool]:
+def _match(
+    candidates: list[_Candidate], fill_shares: Decimal, fill_usdc: Optional[Decimal] = None
+) -> tuple[Optional[int], bool]:
     """Return (event_id, ambiguous). event_id is None when no candidate matches
     the amount; ambiguous=True when more than one does."""
     hits = [c for c in candidates if abs(c.abs_shares - fill_shares) <= MATCH_TOLERANCE]
     if len(hits) == 1:
         return hits[0].event_id, False
     if len(hits) > 1:
+        if fill_usdc is not None and fill_usdc != 0 and any(c.abs_usdc != 0 for c in hits):
+            usdc_hits = [
+                c for c in hits if abs(c.abs_usdc - fill_usdc) <= MATCH_TOLERANCE
+            ]
+            if len(usdc_hits) == 1:
+                return usdc_hits[0].event_id, False
+            if len(usdc_hits) == 0:
+                return None, False
         return None, True
     return None, False
 
@@ -162,12 +187,20 @@ def join_fills(
                 stats = stats._add(already_enriched=1)
                 continue
 
-        event_id, ambiguous = _match(candidates, fill.traded_shares)
+        event_id, ambiguous = _match(
+            candidates,
+            fill.traded_shares,
+            getattr(fill, "collateral_usdc", None),
+        )
         if ambiguous:
             logger.warning(
-                "Ambiguous enrichment for wallet %s tx %s token %s amount %s: "
+                "Ambiguous enrichment for wallet %s tx %s token %s amount %s usdc %s: "
                 "multiple ledger candidates match; leaving unenriched.",
-                wallet, fill.transaction_hash, fill.traded_token_id, fill.traded_shares,
+                wallet,
+                fill.transaction_hash,
+                fill.traded_token_id,
+                fill.traded_shares,
+                getattr(fill, "collateral_usdc", None),
             )
             stats = stats._add(ambiguous=1)
             continue
@@ -239,6 +272,8 @@ def run_enrichment(
     rpc=None,
     from_block: int = 0,
     to_block: Optional[int] = None,
+    chunk_blocks: int = 2000,
+    ignore_watermark: bool = False,
 ) -> EnrichmentStats:
     """Fetch fills for `wallet` from the chosen source and join them onto the
     ledger. `subgraph`/`rpc` may be injected for tests; otherwise they are
@@ -261,24 +296,84 @@ def run_enrichment(
         _update_watermark(session, wallet, subgraph_ts=max(fetch.head_ts, since_ts))
         return stats
 
-    if source == "rpc":
-        if rpc is None:
-            if not settings.rpc_url:
-                raise RuntimeError(
-                    "RPC enrichment requested but PMR_RPC_URL is not set."
-                )
-            from ..sources.rpc import RpcSource
+    if source in ("rpc", "polygonscan"):
+        from ..sources.rpc import RpcError
 
-            rpc = RpcSource(settings.rpc_url)
+        fetcher = rpc if rpc is not None else _build_block_fetcher(source, settings)
         if to_block is None:
-            raise ValueError("RPC enrichment requires an explicit to_block.")
-        fetch = rpc.fetch_order_filled_logs(raw_store, from_block=from_block, to_block=to_block)
-        # eth_getLogs is not wallet-scoped; join filters by maker/taker == wallet.
-        stats = join_fills(session, wallet, fetch.logs, source="rpc")
-        _update_watermark(session, wallet, rpc_block=fetch.head_block)
+            raise ValueError(f"{source} enrichment requires an explicit to_block.")
+
+        # Resume: never re-scan blocks already covered by a prior run. The
+        # watermark advances per chunk, so an interrupted run picks up where it
+        # stopped (enrichment is idempotent, so overlap would be harmless too).
+        resume_block = None if ignore_watermark else _current_rpc_block(session, wallet)
+        start = from_block if resume_block is None else max(from_block, resume_block + 1)
+
+        stats = EnrichmentStats()
+        size = max(1, chunk_blocks)
+        b = start
+        while b <= to_block:
+            end = min(b + size - 1, to_block)
+            try:
+                fetch = fetcher.fetch_order_filled_logs(
+                    raw_store, wallet=wallet, from_block=b, to_block=end
+                )
+            except RpcError:
+                # Provider capped the range/response. Halve and retry the same
+                # start; give up only when a single block still fails.
+                if size <= 1:
+                    raise
+                size = max(1, size // 2)
+                logger.warning(
+                    "getLogs [%d,%d] over provider limit; halving chunk to %d blocks.",
+                    b, end, size,
+                )
+                continue
+            chunk = join_fills(session, wallet, fetch.logs, source=source)
+            stats = stats._add(
+                fills_seen=chunk.fills_seen,
+                enriched=chunk.enriched,
+                ambiguous=chunk.ambiguous,
+                unmatched=chunk.unmatched,
+                already_enriched=chunk.already_enriched,
+            )
+            _update_watermark(session, wallet, rpc_block=end)
+            b = end + 1
+            if size < chunk_blocks:  # recover after a dense/capped patch
+                size = min(chunk_blocks, size * 2)
         return stats
 
     raise ValueError(f"Unknown enrichment source: {source!r}")
+
+
+def _build_block_fetcher(source: str, settings: Settings):
+    if source == "rpc":
+        if not settings.rpc_url:
+            raise RuntimeError("RPC enrichment requested but PMR_RPC_URL is not set.")
+        from ..sources.rpc import RpcSource
+
+        return RpcSource(settings.rpc_url)
+
+    if source == "polygonscan":
+        if not settings.polygonscan_api_key:
+            raise RuntimeError(
+                "PolygonScan enrichment requested but PMR_POLYGONSCAN_API_KEY is not set."
+            )
+        from ..sources.polygonscan import PolygonscanSource
+
+        return PolygonscanSource(settings.polygonscan_api_key)
+
+    raise ValueError(f"Unknown block enrichment source: {source!r}")
+
+
+def _current_rpc_block(session: Session, wallet: str) -> Optional[int]:
+    row = session.execute(
+        text("SELECT rpc_synced_to_block FROM enrichment_watermarks WHERE wallet = :w"),
+        {"w": wallet.lower()},
+    ).fetchone()
+    if row is None or row.rpc_synced_to_block is None:
+        return None
+    return int(row.rpc_synced_to_block)
 
 
 def _current_subgraph_ts(session: Session, wallet: str) -> int:
@@ -355,7 +450,8 @@ def classify_trade_events(
 
     rows = session.execute(
         text(
-            "SELECT id, ts, tx_hash, token_id, delta_shares FROM wallet_events "
+            "SELECT id, ts, tx_hash, token_id, delta_shares, delta_usdc, usdc_size "
+            "FROM wallet_events "
             "WHERE wallet = :w AND event_type = 'TRADE' ORDER BY ts, id"
         ),
         {"w": wallet},
@@ -372,7 +468,7 @@ def classify_trade_events(
         )
     }
 
-    # Group unenriched rows by (tx_hash, token, rounded |shares|) to find twins.
+    # Group unenriched rows by (tx_hash, token, rounded |shares|, |USDC|) to find twins.
     groups: dict[tuple, list[int]] = {}
     for r in rows:
         if r.id in enriched_ids:
@@ -381,6 +477,7 @@ def classify_trade_events(
             (r.tx_hash or "").lower(),
             r.token_id,
             abs(Decimal(r.delta_shares)).quantize(MATCH_TOLERANCE),
+            _ledger_abs_usdc(r.delta_usdc, getattr(r, "usdc_size", 0)).quantize(MATCH_TOLERANCE),
         )
         groups.setdefault(key, []).append(r.id)
 
