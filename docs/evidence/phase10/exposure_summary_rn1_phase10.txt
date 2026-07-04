@@ -1,0 +1,4 @@
+structure_type        rows    days  first_day   last_day  
+--------------------  ------  ----  ----------  ----------
+binary                408405  356   2025-07-09  2026-07-03
+negRisk-event-member  291044  346   2025-07-09  2026-07-03

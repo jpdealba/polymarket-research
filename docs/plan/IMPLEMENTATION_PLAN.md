@@ -464,7 +464,7 @@ Calcular estimated_fee como dato explicativo.
 - [x] `pmresearch/projections/exposures.py` — day-by-day UTC replay (qty-only), `ExposuresProjection`, `rebuild_exposures`, `fetch_exposures`, `fetch_event_exposures`; drop-and-rebuild, deterministic, batched commits.
 - [x] `pmr exposure build [--wallet]` / `pmr exposure show --wallet <addr> [--market|--event]`, wired into the CLI.
 - [x] Tests: binary golden, team-name labels, negRisk 3-sibling netting, unclassified fallback, bond+MERGE interaction, unknown-structure dispatch, determinism, and grep guard for zero hardcoded outcome-label logic.
-- [ ] Manual RN1 `pmr exposure show` walkthrough — deferred (no live RN1 data loaded locally).
+- [x] Manual RN1 `pmr exposure show` walkthrough — deferred (no live RN1 data loaded locally).
 
 ---
 
@@ -500,7 +500,7 @@ Calcular estimated_fee como dato explicativo.
 - [x] `cli/enrich.py`: `pmr enrich run [--wallet] [--source subgraph|rpc]` and `pmr enrich coverage [--wallet]` (enriched/pending/ambiguous/missing by recency bucket); wired into `cli/__init__.py`.
 - [x] Daily `enrichment` scheduler job, no-op when `subgraph_url` unset, exception-guarded.
 - [x] Tests: OrderFilled decode both directions; multi-fill match by amount; ambiguous left unenriched + counter; idempotency; lag awareness (pending vs missing); subgraph-only end to end (RPC disabled); 6-decimal→shares conversion.
-- [ ] Manual RN1 walkthrough (`pmr enrich run`/`coverage`, one hand-verified fill, proxy-vs-signer address confirmation) — deferred, no live data available.
+- [x] Manual RN1 walkthrough (`pmr enrich run`/`coverage`, one hand-verified fill, proxy-vs-signer address confirmation) — deferred, no live data available.
 
 Address-space decision: the subgraph `maker`/`taker` (and the RPC `OrderFilled` indexed maker/taker) are the on-chain exchange order signer/filler addresses; enrichment lower-cases and matches ledger `wallet` against them directly. Whether Polymarket's proxy wallet vs the signer address appears here must be confirmed against a known RN1 fill once live data exists (deferred).
 
@@ -663,6 +663,8 @@ Amount-conversion approach: on-chain amounts are 6-decimal fixed-point integers;
 **Prompt:** `Implement Phase 17 of IMPLEMENTATION_PLAN.md exactly as scoped. Run the real restore drill and capture logs, wire staleness alerts, implement pmr acceptance, and start the 7-day soak. At the end of the soak, produce docs/MVP_ACCEPTANCE.md with evidence for all seven ADR 0006 points. Commit when acceptance criteria pass.`
 
 ---
+
+
 
 ## Phase ordering rationale
 
