@@ -34,6 +34,7 @@ ENRICHMENT_INTERVAL_HOURS = 24
 BOOK_SAMPLE_INTERVAL_MINUTES = 5
 BOOK_PRUNE_INTERVAL_HOURS = 24
 ANALYSIS_INTERVAL_HOURS = 24
+STALENESS_CHECK_INTERVAL_MINUTES = 15
 
 
 def _fetch_and_upsert_markets(
@@ -309,6 +310,22 @@ def run_analysis_cycle(settings: Settings) -> None:
         session.close()
 
 
+def run_staleness_check_cycle(settings: Settings) -> None:
+    """Periodic staleness and failure alerting (Phase 17).  Scans all active
+    wallets, emits log-based alerts, and optionally sends Telegram notifications.
+    Exception-guarded like all other cycles."""
+    from ..alerts import run_staleness_check
+
+    try:
+        alerts = run_staleness_check(settings)
+        if alerts:
+            logger.warning("Staleness check: %d alert(s) emitted", len(alerts))
+        else:
+            logger.info("Staleness check: all wallets healthy")
+    except Exception:
+        logger.exception("Staleness check cycle failed")
+
+
 def build_scheduler(settings: Settings) -> BlockingScheduler:
     scheduler = BlockingScheduler()
     scheduler.add_job(
@@ -373,6 +390,15 @@ def build_scheduler(settings: Settings) -> BlockingScheduler:
         hours=ANALYSIS_INTERVAL_HOURS,
         args=[settings],
         id="analysis",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        run_staleness_check_cycle,
+        "interval",
+        minutes=STALENESS_CHECK_INTERVAL_MINUTES,
+        args=[settings],
+        id="staleness_check",
         max_instances=1,
         coalesce=True,
     )

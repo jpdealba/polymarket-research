@@ -33,6 +33,9 @@ class Settings:
     # Days to retain raw book snapshots before pruning (Phase 12).
     # Summary rows (best_bid/ask/spread/mid) are kept indefinitely.
     book_retention_raw_days: int = 30
+    # Telegram alerting (Phase 17). Both must be set for Telegram notifications.
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
 
     @property
     def db_dir(self) -> Path:
@@ -74,6 +77,8 @@ def get_settings() -> Settings:
         dust_epsilon=Decimal(_env("PMR_DUST_EPSILON", "0.000001")),
         book_sample_interval_s=int(_env("PMR_BOOK_SAMPLE_INTERVAL_S", "300")),
         book_retention_raw_days=int(_env("PMR_BOOK_RETENTION_RAW_DAYS", "30")),
+        telegram_bot_token=_env("PMR_TELEGRAM_BOT_TOKEN", ""),
+        telegram_chat_id=_env("PMR_TELEGRAM_CHAT_ID", ""),
     )
 
 

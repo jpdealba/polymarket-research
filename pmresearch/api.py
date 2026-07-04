@@ -52,6 +52,8 @@ from .walletmanager.manager import (
     list_sync_states,
     list_wallets,
 )
+# Phase 17 — alerting
+from .alerts import check_wallet_alerts, AlertSeverity, WalletAlert
 
 __all__ = [
     "get_settings",
@@ -91,6 +93,9 @@ __all__ = [
     "fetch_events_by_ids",
     "book_sampler_status",
     "BookSamplerStatus",
+    "check_wallet_alerts",
+    "AlertSeverity",
+    "WalletAlert",
 ]
 
 

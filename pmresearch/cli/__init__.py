@@ -27,6 +27,7 @@ from .replay import holdings_group, replay_group
 from .sync import sync_group
 from .wallets import wallet_group
 from .books import books_group
+from .acceptance import acceptance
 
 
 @click.group()
@@ -54,6 +55,7 @@ main.add_command(books_group)
 main.add_command(fingerprints_group)
 main.add_command(detect_group)
 main.add_command(report_group)
+main.add_command(acceptance)
 replay_group.add_command(replay_episodes)
 
 

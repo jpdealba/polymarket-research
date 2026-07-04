@@ -72,7 +72,8 @@ def sync_incremental(address: str | None) -> None:
 
 
 @sync_group.command("status")
-def sync_status() -> None:
+@click.option("--alerts", is_flag=True, help="Show staleness and failure alerts.")
+def sync_status(alerts: bool) -> None:
     settings = get_settings()
     ensure_data_dirs(settings)
     session = get_session_factory(settings)()
@@ -84,8 +85,26 @@ def sync_status() -> None:
         click.echo("No wallets tracked.")
         return
     for row in rows:
+        stale = manager.is_stale(session, row.wallet, cadence_s=900) if row.last_success_at else False
+        flag = ""
+        if stale:
+            flag = " [STALE]"
+        elif row.consecutive_failures >= 3:
+            flag = " [FAILING]"
+        elif row.status == "new":
+            flag = " [NEW]"
         click.echo(
-            f"{row.wallet}: status={row.status} backfill_complete={row.backfill_complete} "
+            f"{row.wallet}: status={row.status}{flag} backfill_complete={row.backfill_complete} "
             f"last_success_at={row.last_success_at} consecutive_failures={row.consecutive_failures} "
             f"last_error={row.last_error or '-'}"
         )
+    if alerts:
+        from ..alerts import check_wallet_alerts
+
+        alert_list = check_wallet_alerts(session, settings)
+        if alert_list:
+            click.echo("\nAlerts:")
+            for a in alert_list:
+                click.echo(f"  [{a.severity.value.upper()}] {a.alert_type}: {a.message}")
+        else:
+            click.echo("\nNo active alerts.")
