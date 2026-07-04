@@ -33,6 +33,15 @@ logger = logging.getLogger(__name__)
 # Shares agree to 6 decimals on both sides; allow one unit of rounding slack.
 MATCH_TOLERANCE = Decimal("0.000001")
 
+EXCHANGE_COUNTERPARTIES = frozenset(
+    {
+        "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e",
+        "0xc5d563a36ae78145c45a50134d48a1215220f80a",
+        "0xe111180000d2663c0091e4f400237545b87b996b",
+        "0xe2222d279d744050d28e00520010520000310f59",
+    }
+)
+
 
 @dataclass(frozen=True)
 class EnrichmentStats:
@@ -59,6 +68,29 @@ class _Candidate:
     event_id: int
     abs_shares: Decimal
     abs_usdc: Decimal
+
+
+@dataclass(frozen=True)
+class _FillCandidate:
+    event_id: int
+    role: str
+    order_hash: str
+    fee: str
+    counterparty: Optional[str]
+    source: str
+    enriched_at: str
+    provenance: str
+
+
+@dataclass(frozen=True)
+class _ResolvedEnrichment:
+    event_id: int
+    role: str
+    order_hash: str
+    fee: str
+    counterparty: Optional[str]
+    source: str
+    enriched_at: str
 
 
 def _trade_candidates(
@@ -89,18 +121,6 @@ def _ledger_abs_usdc(delta_usdc: object, usdc_size: object) -> Decimal:
     return abs(Decimal(str(delta_usdc or "0")))
 
 
-def _enriched_set(session: Session, event_ids: list[int]) -> set[int]:
-    if not event_ids:
-        return set()
-    placeholders = ",".join(f":id{i}" for i in range(len(event_ids)))
-    params = {f"id{i}": eid for i, eid in enumerate(event_ids)}
-    rows = session.execute(
-        text(f"SELECT event_id FROM fill_enrichment WHERE event_id IN ({placeholders})"),
-        params,
-    )
-    return {r.event_id for r in rows}
-
-
 def _match(
     candidates: list[_Candidate], fill_shares: Decimal, fill_usdc: Optional[Decimal] = None
 ) -> tuple[Optional[int], bool]:
@@ -122,7 +142,77 @@ def _match(
     return None, False
 
 
-def _insert_enrichment(
+def _classify_fill_role(fill, wallet: str) -> tuple[Optional[str], Optional[str], str]:
+    maker = str(fill.maker).lower()
+    taker = str(fill.taker).lower()
+    evidence: list[tuple[str, Optional[str], str]] = []
+
+    if maker == wallet:
+        if taker in EXCHANGE_COUNTERPARTIES:
+            evidence.append(("taker", taker, "maker_exchange_taker_order"))
+        else:
+            evidence.append(("maker", taker, "maker"))
+
+    if taker == wallet:
+        if maker in EXCHANGE_COUNTERPARTIES:
+            evidence.append(("ambiguous", maker, "taker_exchange_counterparty"))
+        else:
+            evidence.append(("taker", maker, "taker"))
+
+    if not evidence:
+        return None, None, "unmatched"
+
+    roles = {role for role, _, _ in evidence}
+    if len(roles) == 1 and "ambiguous" not in roles:
+        return evidence[0]
+
+    counterparty = next((cp for _, cp, _ in evidence if cp is not None), None)
+    provenance = "+".join(sorted({prov for _, _, prov in evidence}))
+    return "ambiguous", counterparty, provenance
+
+
+def _candidate_sort_key(candidate: _FillCandidate) -> tuple[int, int, str, str, str]:
+    provenance_priority = {
+        "taker": 0,
+        "maker": 1,
+        "maker_exchange_taker_order": 2,
+    }.get(candidate.provenance, 9)
+    exchange_counterparty = (
+        1 if candidate.counterparty in EXCHANGE_COUNTERPARTIES else 0
+    )
+    return (
+        exchange_counterparty,
+        provenance_priority,
+        candidate.source,
+        candidate.order_hash,
+        candidate.counterparty or "",
+    )
+
+
+def _resolve_event_candidates(
+    event_id: int, candidates: list[_FillCandidate]
+) -> _ResolvedEnrichment:
+    roles = {candidate.role for candidate in candidates}
+    if len(roles) == 1 and "ambiguous" not in roles:
+        role = next(iter(roles))
+        selectable = [candidate for candidate in candidates if candidate.role == role]
+    else:
+        role = "ambiguous"
+        selectable = candidates
+
+    chosen = sorted(selectable, key=_candidate_sort_key)[0]
+    return _ResolvedEnrichment(
+        event_id=event_id,
+        role=role,
+        order_hash=chosen.order_hash,
+        fee=chosen.fee,
+        counterparty=chosen.counterparty,
+        source=chosen.source,
+        enriched_at=chosen.enriched_at,
+    )
+
+
+def _upsert_enrichment(
     session: Session,
     *,
     event_id: int,
@@ -132,13 +222,47 @@ def _insert_enrichment(
     counterparty: Optional[str],
     source: str,
     enriched_at: str,
-) -> bool:
-    result = session.execute(
+) -> str:
+    existing = session.execute(
+        text(
+            "SELECT role, order_hash, fee, counterparty, source "
+            "FROM fill_enrichment WHERE event_id = :event_id"
+        ),
+        {"event_id": event_id},
+    ).fetchone()
+    if existing is not None:
+        unchanged = (
+            existing.role == role
+            and existing.order_hash == order_hash
+            and existing.fee == fee
+            and existing.counterparty == counterparty
+            and existing.source == source
+        )
+        if unchanged:
+            return "unchanged"
+        session.execute(
+            text(
+                "UPDATE fill_enrichment SET role = :role, order_hash = :order_hash, "
+                "fee = :fee, counterparty = :counterparty, source = :source, "
+                "enriched_at = :enriched_at WHERE event_id = :event_id"
+            ),
+            {
+                "event_id": event_id,
+                "role": role,
+                "order_hash": order_hash,
+                "fee": fee,
+                "counterparty": counterparty,
+                "source": source,
+                "enriched_at": enriched_at,
+            },
+        )
+        return "updated"
+
+    session.execute(
         text(
             "INSERT INTO fill_enrichment "
             "(event_id, role, order_hash, fee, counterparty, source, enriched_at) "
-            "VALUES (:event_id, :role, :order_hash, :fee, :counterparty, :source, :enriched_at) "
-            "ON CONFLICT(event_id) DO NOTHING"
+            "VALUES (:event_id, :role, :order_hash, :fee, :counterparty, :source, :enriched_at)"
         ),
         {
             "event_id": event_id,
@@ -150,7 +274,76 @@ def _insert_enrichment(
             "enriched_at": enriched_at,
         },
     )
-    return result.rowcount > 0
+    return "inserted"
+
+
+def _prepare_candidate_store(session: Session) -> None:
+    # Keep large replay runs out of Python heap; SQLite may spill temp tables to disk.
+    session.execute(text("PRAGMA temp_store = FILE"))
+    session.execute(text("DROP TABLE IF EXISTS temp.fill_enrichment_candidates"))
+    session.execute(
+        text(
+            "CREATE TEMP TABLE fill_enrichment_candidates ("
+            "event_id INTEGER NOT NULL, "
+            "role TEXT NOT NULL, "
+            "order_hash TEXT NOT NULL, "
+            "fee TEXT, "
+            "counterparty TEXT, "
+            "source TEXT NOT NULL, "
+            "enriched_at TEXT NOT NULL, "
+            "provenance TEXT NOT NULL"
+            ")"
+        )
+    )
+
+
+def _flush_candidate_batch(session: Session, batch: list[dict[str, object]]) -> None:
+    if not batch:
+        return
+    session.execute(
+        text(
+            "INSERT INTO temp.fill_enrichment_candidates "
+            "(event_id, role, order_hash, fee, counterparty, source, enriched_at, provenance) "
+            "VALUES (:event_id, :role, :order_hash, :fee, :counterparty, :source, "
+            ":enriched_at, :provenance)"
+        ),
+        batch,
+    )
+    batch.clear()
+
+
+def _candidate_from_row(row) -> _FillCandidate:
+    return _FillCandidate(
+        event_id=int(row.event_id),
+        role=row.role,
+        order_hash=row.order_hash,
+        fee=row.fee,
+        counterparty=row.counterparty,
+        source=row.source,
+        enriched_at=row.enriched_at,
+        provenance=row.provenance,
+    )
+
+
+def _iter_resolved_enrichments(session: Session):
+    rows = session.execute(
+        text(
+            "SELECT event_id, role, order_hash, fee, counterparty, source, enriched_at, provenance "
+            "FROM temp.fill_enrichment_candidates "
+            "ORDER BY event_id, role, counterparty, provenance, source, order_hash"
+        )
+    )
+    current_event_id: Optional[int] = None
+    current_candidates: list[_FillCandidate] = []
+    for row in rows:
+        event_id = int(row.event_id)
+        if current_event_id is not None and event_id != current_event_id:
+            yield _resolve_event_candidates(current_event_id, current_candidates)
+            current_candidates = []
+        current_event_id = event_id
+        current_candidates.append(_candidate_from_row(row))
+    if current_event_id is not None:
+        yield _resolve_event_candidates(current_event_id, current_candidates)
 
 
 def join_fills(
@@ -166,27 +359,19 @@ def join_fills(
     wallet = wallet.lower()
     enriched_at = enriched_at or datetime.now(timezone.utc).isoformat()
     stats = EnrichmentStats()
+    _prepare_candidate_store(session)
+    candidate_batch: list[dict[str, object]] = []
 
     for fill in fills:
         stats = stats._add(fills_seen=1, head_ts=getattr(fill, "timestamp", 0) or 0)
 
-        if fill.maker == wallet:
-            role, counterparty = "maker", fill.taker
-        elif fill.taker == wallet:
-            role, counterparty = "taker", fill.maker
-        else:
+        role, counterparty, provenance = _classify_fill_role(fill, wallet)
+        if role is None:
             # Fill returned by the source but not actually involving this wallet.
             stats = stats._add(unmatched=1)
             continue
 
         candidates = _trade_candidates(session, wallet, fill.transaction_hash, fill.traded_token_id)
-        if candidates:
-            enriched_ids = _enriched_set(session, [c.event_id for c in candidates])
-            candidates = [c for c in candidates if c.event_id not in enriched_ids]
-            if not candidates:
-                stats = stats._add(already_enriched=1)
-                continue
-
         event_id, ambiguous = _match(
             candidates,
             fill.traded_shares,
@@ -208,21 +393,51 @@ def join_fills(
             stats = stats._add(unmatched=1)
             continue
 
-        inserted = _insert_enrichment(
-            session,
-            event_id=event_id,
-            role=role,
-            order_hash=fill.order_hash,
-            fee=str(fill.fee_decimal),
-            counterparty=counterparty,
-            source=source,
-            enriched_at=enriched_at,
+        candidate_batch.append(
+            {
+                "event_id": event_id,
+                "role": role,
+                "order_hash": str(fill.order_hash).lower(),
+                "fee": str(fill.fee_decimal),
+                "counterparty": counterparty.lower() if counterparty else None,
+                "source": source,
+                "enriched_at": enriched_at,
+                "provenance": provenance,
+            }
         )
-        if inserted:
+        if len(candidate_batch) >= 5000:
+            _flush_candidate_batch(session, candidate_batch)
+
+    _flush_candidate_batch(session, candidate_batch)
+    session.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS temp.ix_fill_enrichment_candidates_event_id "
+            "ON fill_enrichment_candidates (event_id)"
+        )
+    )
+
+    for resolved in _iter_resolved_enrichments(session):
+        outcome = _upsert_enrichment(
+            session,
+            event_id=resolved.event_id,
+            role=resolved.role,
+            order_hash=resolved.order_hash,
+            fee=resolved.fee,
+            counterparty=resolved.counterparty,
+            source=resolved.source,
+            enriched_at=resolved.enriched_at,
+        )
+        if resolved.role == "ambiguous":
+            if outcome == "unchanged":
+                stats = stats._add(already_enriched=1)
+            else:
+                stats = stats._add(ambiguous=1)
+        elif outcome in ("inserted", "updated"):
             stats = stats._add(enriched=1)
         else:
             stats = stats._add(already_enriched=1)
 
+    session.execute(text("DROP TABLE IF EXISTS temp.fill_enrichment_candidates"))
     session.commit()
     return stats
 
@@ -459,11 +674,13 @@ def classify_trade_events(
     if not rows:
         return []
 
-    enriched_ids = {
-        r.event_id
+    enrichment_status = {
+        r.event_id: r.role
         for r in session.execute(
-            text("SELECT fe.event_id FROM fill_enrichment fe "
-                 "JOIN wallet_events we ON we.id = fe.event_id WHERE we.wallet = :w"),
+            text(
+                "SELECT fe.event_id, fe.role FROM fill_enrichment fe "
+                "JOIN wallet_events we ON we.id = fe.event_id WHERE we.wallet = :w"
+            ),
             {"w": wallet},
         )
     }
@@ -471,7 +688,7 @@ def classify_trade_events(
     # Group unenriched rows by (tx_hash, token, rounded |shares|, |USDC|) to find twins.
     groups: dict[tuple, list[int]] = {}
     for r in rows:
-        if r.id in enriched_ids:
+        if r.id in enrichment_status:
             continue
         key = (
             (r.tx_hash or "").lower(),
@@ -487,7 +704,9 @@ def classify_trade_events(
 
     result: list[tuple[int, str]] = []
     for r in rows:
-        if r.id in enriched_ids:
+        if enrichment_status.get(r.id) == "ambiguous":
+            status = "ambiguous"
+        elif r.id in enrichment_status:
             status = "enriched"
         elif r.ts > head_ts:
             status = "pending"

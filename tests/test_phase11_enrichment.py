@@ -362,6 +362,237 @@ def test_amount_conversion_matches_delta_shares(session):
     assert stats.enriched == 1
 
 
+def test_simple_maker_match_assigns_maker(session):
+    wallet, other = "0xaaa", "0xbbb"
+    event_id = _seed_trade(session, wallet, tx="0xmaker", token="101", delta_shares="5")
+    session.commit()
+
+    fill = _fill(
+        wallet_is_maker=True,
+        tx="0xmaker",
+        token="101",
+        shares="5",
+        maker=wallet,
+        taker=other,
+    )
+
+    stats = join_fills(session, wallet, [fill], source="subgraph")
+
+    assert stats.enriched == 1
+    row = session.execute(
+        text("SELECT role, counterparty FROM fill_enrichment WHERE event_id = :id"),
+        {"id": event_id},
+    ).fetchone()
+    assert row.role == "maker"
+    assert row.counterparty == other
+
+
+def test_simple_taker_match_assigns_taker(session):
+    wallet, other = "0xaaa", "0xbbb"
+    event_id = _seed_trade(session, wallet, tx="0xtaker", token="101", delta_shares="5")
+    session.commit()
+
+    fill = _fill(
+        wallet_is_maker=False,
+        tx="0xtaker",
+        token="101",
+        shares="5",
+        maker=other,
+        taker=wallet,
+    )
+
+    stats = join_fills(session, wallet, [fill], source="subgraph")
+
+    assert stats.enriched == 1
+    row = session.execute(
+        text("SELECT role, counterparty FROM fill_enrichment WHERE event_id = :id"),
+        {"id": event_id},
+    ).fetchone()
+    assert row.role == "taker"
+    assert row.counterparty == other
+
+
+def test_enrichment_address_normalization(session):
+    wallet, other = "0xaaa", "0xbbb"
+    event_id = _seed_trade(session, wallet, tx="0xcase", token="101", delta_shares="5")
+    session.commit()
+
+    fill = OrderFill(
+        order_hash="0xCASE",
+        maker="0XAAA",
+        taker="0XBBB",
+        maker_asset_id=101,
+        taker_asset_id=0,
+        maker_amount_filled=5_000000,
+        taker_amount_filled=5_000000,
+        fee=0,
+        timestamp=1000,
+        transaction_hash="0XCASE",
+        subgraph_id="case",
+    )
+
+    stats = join_fills(session, "0XAAA", [fill], source="subgraph")
+
+    assert stats.enriched == 1
+    row = session.execute(
+        text("SELECT role, order_hash, counterparty FROM fill_enrichment WHERE event_id = :id"),
+        {"id": event_id},
+    ).fetchone()
+    assert row.role == "maker"
+    assert row.order_hash == "0xcase"
+    assert row.counterparty == other
+
+
+def test_exchange_facing_maker_fill_classifies_wallet_as_taker(session):
+    wallet = "0xaaa"
+    event_id = _seed_trade(session, wallet, tx="0xexchange", token="101", delta_shares="5")
+    session.commit()
+
+    fill = _fill(
+        wallet_is_maker=True,
+        tx="0xexchange",
+        token="101",
+        shares="5",
+        maker=wallet,
+        taker=CTF_EXCHANGE,
+        order_hash="0xexchangeorder",
+    )
+
+    stats = join_fills(session, wallet, [fill], source="subgraph")
+
+    assert stats.enriched == 1
+    row = session.execute(
+        text("SELECT role, counterparty FROM fill_enrichment WHERE event_id = :id"),
+        {"id": event_id},
+    ).fetchone()
+    assert row.role == "taker"
+    assert row.counterparty == CTF_EXCHANGE
+
+
+def test_companion_logs_do_not_let_maker_fetch_order_win(session):
+    wallet, other = "0xaaa", "0xbbb"
+    event_id = _seed_trade(session, wallet, tx="0xcompanions", token="101", delta_shares="5")
+    session.execute(
+        text(
+            "INSERT INTO fill_enrichment "
+            "(event_id, role, order_hash, fee, counterparty, source, enriched_at) "
+            "VALUES (:event_id, 'maker', '0xstale', '0', :counterparty, 'subgraph', 'old')"
+        ),
+        {"event_id": event_id, "counterparty": CTF_EXCHANGE},
+    )
+    session.commit()
+
+    maker_page = _fill(
+        wallet_is_maker=True,
+        tx="0xcompanions",
+        token="101",
+        shares="5",
+        maker=wallet,
+        taker=CTF_EXCHANGE,
+        order_hash="0xmakerpage",
+    )
+    taker_page = _fill(
+        wallet_is_maker=False,
+        tx="0xcompanions",
+        token="101",
+        shares="5",
+        maker=other,
+        taker=wallet,
+        order_hash="0xtakerpage",
+    )
+
+    stats = join_fills(session, wallet, [maker_page, taker_page], source="subgraph")
+
+    assert stats.enriched == 1
+    row = session.execute(
+        text("SELECT role, order_hash, counterparty FROM fill_enrichment WHERE event_id = :id"),
+        {"id": event_id},
+    ).fetchone()
+    assert row.role == "taker"
+    assert row.order_hash == "0xtakerpage"
+    assert row.counterparty == other
+
+
+def test_conflicting_maker_and_taker_evidence_classifies_ambiguous(session):
+    wallet = "0xaaa"
+    event_id = _seed_trade(session, wallet, tx="0xconflict", token="101", delta_shares="5")
+    session.commit()
+
+    maker_fill = _fill(
+        wallet_is_maker=True,
+        tx="0xconflict",
+        token="101",
+        shares="5",
+        maker=wallet,
+        taker="0xbbb",
+        order_hash="0xmakerrole",
+    )
+    taker_fill = _fill(
+        wallet_is_maker=False,
+        tx="0xconflict",
+        token="101",
+        shares="5",
+        maker="0xccc",
+        taker=wallet,
+        order_hash="0xtakerrole",
+    )
+
+    stats = join_fills(session, wallet, [maker_fill, taker_fill], source="subgraph")
+
+    assert stats.enriched == 0
+    assert stats.ambiguous == 1
+    row = session.execute(
+        text("SELECT role FROM fill_enrichment WHERE event_id = :id"),
+        {"id": event_id},
+    ).fetchone()
+    assert row.role == "ambiguous"
+    cov = enrichment_coverage(session, wallet, now_ts=3000, head_ts=2000)
+    assert cov.ambiguous == 1
+    assert cov.enriched == 0
+
+
+def test_subgraph_and_polygonscan_shapes_resolve_exchange_roles_consistently(session):
+    wallet = "0xaaa"
+    subgraph_id = _seed_trade(
+        session, wallet, tx="0xsubgraphex", token="101", delta_shares="5", key="sg"
+    )
+    polygonscan_id = _seed_trade(
+        session, wallet, tx="0xpolygonex", token="102", delta_shares="7", key="poly"
+    )
+    session.commit()
+
+    subgraph_fill = _fill(
+        wallet_is_maker=True,
+        tx="0xsubgraphex",
+        token="101",
+        shares="5",
+        maker=wallet,
+        taker=CTF_EXCHANGE,
+    )
+    polygonscan_log = _rpc_log(
+        maker=wallet,
+        taker=CTF_EXCHANGE,
+        token="102",
+        shares="7",
+        tx="0xpolygonex",
+        block=10,
+    )
+
+    subgraph_stats = join_fills(session, wallet, [subgraph_fill], source="subgraph")
+    polygonscan_stats = join_fills(session, wallet, [polygonscan_log], source="polygonscan")
+
+    assert subgraph_stats.enriched == 1
+    assert polygonscan_stats.enriched == 1
+    rows = {
+        r.event_id: r
+        for r in session.execute(text("SELECT event_id, role, source FROM fill_enrichment"))
+    }
+    assert rows[subgraph_id].role == "taker"
+    assert rows[subgraph_id].source == "subgraph"
+    assert rows[polygonscan_id].role == "taker"
+    assert rows[polygonscan_id].source == "polygonscan"
+
+
 # --- coverage / lag awareness -----------------------------------------------
 
 
