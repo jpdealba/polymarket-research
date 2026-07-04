@@ -1,0 +1,29 @@
+wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea scope=category:Sports window=all version=1 computed_at=2026-07-04T12:22:52.690756+00:00
+[calibration]
+  entry_price_distribution         {"[0.0,0.1)":"0.1093729377085860458685035856","[0.1,0.2)":"0.09699761795521252993268680825","[0.2,0.3)":"0.1005046918111710986945891758","[0.3,0.4)":"0.1024719214113772492725021526","[0.4,0.5)":"0.1199318697480311991301451225","[0.5,0.6)":"0.1139673301614636691031821353","[0.6,0.7)":"0.1001778677242358915698240807","[0.7,0.8)":"0.09345911870627942202417241228","[0.8,0.9)":"0.08613700214321180086356979894","[0.9,1.0]":"0.07697964263043109354082472801"}
+  resolution_outcome_calibration   {"[0.0,0.1)":{"actual_win_rate":"0.04857598226041161388677153350","implied":"0.05","n":14431},"[0.1,0.2)":{"actual_win_rate":"0.07827698008337193144974525243","implied":"0.15","n":12954},"[0.2,0.3)":{"actual_win_rate":"0.1473003802281368821292775665","implied":"0.25","n":13150},"[0.3,0.4)":{"actual_win_rate":"0.2712456344586728754365541327","implied":"0.35","n":13744},"[0.4,0.5)":{"actual_win_rate":"0.4450021689285492966474561567","implied":"0.45","n":16137},"[0.5,0.6)":{"actual_win_rate":"0.6293380568129633274289837958","implied":"0.55","n":15243},"[0.6,0.7)":{"actual_win_rate":"0.8005271084337349397590361446","implied":"0.65","n":13280},"[0.7,0.8)":{"actual_win_rate":"0.9003990422984836392657621708","implied":"0.75","n":12530},"[0.8,0.9)":{"actual_win_rate":"0.9583691725442972647514192328","implied":"0.85","n":11626},"[0.9,1.0]":{"actual_win_rate":"0.9882102821801314263625821415","implied":"0.95","n":10348}}
+  time_to_event_start_at_entry     1071264.5
+[execution]
+  maker_fill_share                 0.9362112757453462903875946404
+  taker_fill_share                 0.06378872425465370961240535960
+[income]
+  realized_pnl                     7357086.207183693320788372079
+  reward_income_share              0E+21
+  unrealized_pnl                   NULL (unrealized PnL is not decomposed by category)
+[inventory]
+  adds_per_episode                 22.36104407069411971742464238
+  avg_position_size                2232.994553101278704315161613
+  bond_inventory_ratio             0.1463388453885464255509185817
+  episode_count                    159108
+  episode_duration_p50             22212
+  episode_duration_p90             639084
+  market_category_concentration    NULL (concentration is defined across categories (all-scope only))
+  median_position_size             272.9531190221222685149156706
+  merge_frequency                  155.0997229916897506925207756
+  micro_episode_share              0.001736111111111111111111111111
+  partial_exit_frequency           0.5424742941901098624833446464
+  redeem_frequency                 275.5595567867036011080332410
+[quality]
+  enrichment_coverage              0.8309271317045323395920133027
+  stale_mark_share                 NULL (stale-mark share is portfolio-level (all-scope only))
+(22 features)
