@@ -33,6 +33,7 @@ MARKETS_REFRESH_INTERVAL_MINUTES = 60
 ENRICHMENT_INTERVAL_HOURS = 24
 BOOK_SAMPLE_INTERVAL_MINUTES = 5
 BOOK_PRUNE_INTERVAL_HOURS = 24
+ANALYSIS_INTERVAL_HOURS = 24
 
 
 def _fetch_and_upsert_markets(
@@ -279,6 +280,35 @@ def run_book_prune_cycle(settings: Settings) -> None:
         session.close()
 
 
+def run_analysis_cycle(settings: Settings) -> None:
+    """Daily behavioral analysis: recompute each wallet's fingerprints, then run
+    the strategy detectors over the fresh fingerprints (Phase 14 requires labels
+    to recompute after fingerprint updates). Isolated and exception-guarded;
+    per-wallet failures are logged and skipped."""
+    from ..detectors.compute import run_detectors
+    from ..fingerprints.compute import compute_fingerprints
+
+    session = get_session_factory(settings)()
+    try:
+        wallets = [row.address for row in manager.list_wallets(session)]
+        for address in wallets:
+            try:
+                fstats = compute_fingerprints(session, address)
+                dstats = run_detectors(session, address)
+                logger.info(
+                    "Analysis %s: fingerprints(values=%d null=%d) labels=%d",
+                    address,
+                    fstats.values_written,
+                    fstats.null_written,
+                    dstats.labels_written,
+                )
+            except Exception:
+                logger.exception("Analysis failed for %s", address)
+                continue
+    finally:
+        session.close()
+
+
 def build_scheduler(settings: Settings) -> BlockingScheduler:
     scheduler = BlockingScheduler()
     scheduler.add_job(
@@ -334,6 +364,15 @@ def build_scheduler(settings: Settings) -> BlockingScheduler:
         hours=BOOK_PRUNE_INTERVAL_HOURS,
         args=[settings],
         id="book_prune",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        run_analysis_cycle,
+        "interval",
+        hours=ANALYSIS_INTERVAL_HOURS,
+        args=[settings],
+        id="analysis",
         max_instances=1,
         coalesce=True,
     )

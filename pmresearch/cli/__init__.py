@@ -11,6 +11,7 @@ from ..backup import create_backup, restore_backup
 from ..config import ensure_data_dirs, get_settings
 from ..db.migrations import current_revision, upgrade_to_head
 from ..logging_setup import setup_logging
+from .detect import detect_group
 from .enrich import enrich_group
 from .episodes import episodes_group, replay_episodes
 from .equity import equity_group
@@ -50,6 +51,7 @@ main.add_command(exposure_group)
 main.add_command(enrich_group)
 main.add_command(books_group)
 main.add_command(fingerprints_group)
+main.add_command(detect_group)
 replay_group.add_command(replay_episodes)
 
 
