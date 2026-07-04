@@ -1,0 +1,24 @@
+=== ADR 0006 MVP Acceptance (5/7 passed) ===
+
+  [FAIL] Point 1: Wallet support (3+ wallets)
+        Only 1 active wallet(s): 0x2005d16a84ceefa912d4e380cd32e7ff827875ea. Need 3+.
+
+  [PASS] Point 2: Sync uptime (>=7 days)
+        0x2005d16a84ceefa912d4e380cd32e7ff827875ea: last sync 3.4h ago (ok)
+
+  [PASS] Point 3: Projections (episodes, holdings, exposure, equity, staleness)
+        holdings: ok; episodes: ok; exposure: ok; daily_equity: ok; stale_equity_share: ok
+
+  [PASS] Point 4: Detectors (>=3 scored)
+        3 detectors: market_making, inventory_cycling, value_betting. 9 labels stored.
+
+  [PASS] Point 5: Dashboard import boundary + deletion test
+        All dashboard imports go through pmresearch.api only.
+
+  [FAIL] Point 6: Restore drill
+        No restore_drills/ directory found. Run ops/restore_drill.sh first.
+
+  [PASS] Point 7: Research deliverable (wallet report)
+        Latest report: wallet_profile_0xf5042e6ffac5a625d4e7848e0b01373d8eb9e222_20260704T130644Z.md (3008 chars). Reports: 5.
+
+2 criteria still failing.
