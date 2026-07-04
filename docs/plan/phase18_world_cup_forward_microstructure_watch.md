@@ -726,11 +726,11 @@ Add tests for:
 3. Manual token add is idempotent.
 4. `book_sample_runs` groups snapshots correctly.
 5. `maker_fill_context` returns missing when no book exists.
-6. `maker_fill_context` returns stale when book is older than `max_age_s`.
-7. `maker_fill_context` returns weak when book age is 31–60s.
-8. `maker_fill_context` returns usable when book age is 16–30s.
-9. `maker_fill_context` returns good when book age is 6–15s.
-10. `maker_fill_context` returns excellent when book age is <= 5s.
+6. `maker_fill_context` returns stale when book is older than `max_age_s` (default 30s).
+7. `maker_fill_context` returns weak when book age is 11–30s.
+8. `maker_fill_context` returns usable when book age is 6–10s.
+9. `maker_fill_context` returns good when book age is 3–5s.
+10. `maker_fill_context` returns excellent when book age is <= 2s.
 11. Book after fill is never used as entry context.
 12. Streamlit data fetch functions return collector status.
 13. Dashboard gracefully handles no collector data.

@@ -52,7 +52,12 @@ def fetch_events_by_ids(session: Session, ids: list[int]) -> list:
     """Full rows for a set of event ids, ordered for replay (ts, id)."""
     if not ids:
         return []
-    placeholders = ", ".join(f":id{i}" for i in range(len(ids)))
-    params = {f"id{i}": event_id for i, event_id in enumerate(ids)}
-    query = f"SELECT * FROM wallet_events WHERE id IN ({placeholders}) ORDER BY ts, id"
-    return session.execute(text(query), params).fetchall()
+    _CHUNK = 500
+    all_rows: list = []
+    for start in range(0, len(ids), _CHUNK):
+        chunk = ids[start : start + _CHUNK]
+        placeholders = ", ".join(f":id{i}" for i in range(len(chunk)))
+        params = {f"id{i}": event_id for i, event_id in enumerate(chunk)}
+        query = f"SELECT * FROM wallet_events WHERE id IN ({placeholders}) ORDER BY ts, id"
+        all_rows.extend(session.execute(text(query), params).fetchall())
+    return all_rows

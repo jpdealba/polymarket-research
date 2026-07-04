@@ -2,18 +2,35 @@ services:
   collector:
     build: .
     volumes:
-      - ./data:/data
+      - pmresearch_data:/data
     environment:
       - PMR_DATA_DIR=/data
+      - PMR_MARKETS_REFRESH_INTERVAL_MINUTES=${PMR_MARKETS_REFRESH_INTERVAL_MINUTES:-60}
+      - PMR_WORLDCUP_WATCH_ENABLED=${PMR_WORLDCUP_WATCH_ENABLED:-false}
+      - PMR_WORLDCUP_WALLET=${PMR_WORLDCUP_WALLET:-}
+      - PMR_WORLDCUP_WATCHLIST_NAME=${PMR_WORLDCUP_WATCHLIST_NAME:-world_cup_2026}
+      - PMR_WORLDCUP_BOOK_INTERVAL_S=${PMR_WORLDCUP_BOOK_INTERVAL_S:-10}
+      - PMR_WORLDCUP_FAST_BOOK_INTERVAL_S=${PMR_WORLDCUP_FAST_BOOK_INTERVAL_S:-5}
+      - PMR_WORLDCUP_SYNC_INTERVAL_S=${PMR_WORLDCUP_SYNC_INTERVAL_S:-60}
+      - PMR_WORLDCUP_CONTEXT_MAX_AGE_S=${PMR_WORLDCUP_CONTEXT_MAX_AGE_S:-60}
+      - PMR_WORLDCUP_STRICT_CONTEXT_MAX_AGE_S=${PMR_WORLDCUP_STRICT_CONTEXT_MAX_AGE_S:-15}
+      - PMR_WORLDCUP_SAMPLE_LIMIT=${PMR_WORLDCUP_SAMPLE_LIMIT:-200}
+      - PMR_WORLDCUP_ENRICHMENT_INTERVAL_S=${PMR_WORLDCUP_ENRICHMENT_INTERVAL_S:-600}
+      - PMR_POLYGONSCAN_API_KEY=${PMR_POLYGONSCAN_API_KEY:-}
+      - PMR_SUBGRAPH_URL=${PMR_SUBGRAPH_URL:-}
     restart: unless-stopped
 
   dashboard:
     build: .
     volumes:
-      - ./data:/data
+      - pmresearch_data:/data
     environment:
       - PMR_DATA_DIR=/data
     command: ["streamlit", "run", "apps/dashboard/Home.py", "--server.address=0.0.0.0", "--server.port=8501"]
     ports:
       - "8501:8501"
     restart: unless-stopped
+
+volumes:
+  pmresearch_data:
+    name: pmresearch_data

@@ -47,11 +47,14 @@ from .reports.holdings_dq import (
 from .reports.render import render_wallet_profile
 from .reports.wallet_profile import build_wallet_profile
 from .walletmanager.manager import (
+    add_wallet,
     get_sync_state,
     is_stale,
     list_sync_states,
     list_wallets,
 )
+from .walletmanager.scheduler import run_markets_refresh_cycle, run_worldcup_sync_cycle
+from .watchlists.world_cup import WatchlistBuildStats, build_world_cup_watchlist
 from .labels import (
     EventLabel,
     MarketLabel,
@@ -62,6 +65,21 @@ from .labels import (
 )
 # Phase 17 — alerting
 from .alerts import check_wallet_alerts, AlertSeverity, WalletAlert
+from .worldcup.status import (
+    BookHistoryRow,
+    MakerFillContextRow,
+    WorldCupCollectorStatus,
+    WorldCupContextCoverage,
+    phase18_tables_exist,
+    set_worldcup_tracked_wallets,
+    worldcup_tracked_wallet_rows,
+    worldcup_tracked_wallets,
+    worldcup_book_history,
+    worldcup_collector_status,
+    worldcup_context_coverage,
+    worldcup_recent_maker_fills,
+    worldcup_watchlist_tokens,
+)
 
 __all__ = [
     "get_settings",
@@ -69,6 +87,7 @@ __all__ = [
     "get_session_factory",
     "open_session",
     "list_wallets",
+    "add_wallet",
     "get_sync_state",
     "list_sync_states",
     "is_stale",
@@ -110,6 +129,23 @@ __all__ = [
     "check_wallet_alerts",
     "AlertSeverity",
     "WalletAlert",
+    "phase18_tables_exist",
+    "worldcup_tracked_wallets",
+    "worldcup_tracked_wallet_rows",
+    "set_worldcup_tracked_wallets",
+    "worldcup_collector_status",
+    "worldcup_watchlist_tokens",
+    "worldcup_recent_maker_fills",
+    "worldcup_context_coverage",
+    "worldcup_book_history",
+    "WorldCupCollectorStatus",
+    "WorldCupContextCoverage",
+    "MakerFillContextRow",
+    "BookHistoryRow",
+    "run_markets_refresh_cycle",
+    "run_worldcup_sync_cycle",
+    "build_world_cup_watchlist",
+    "WatchlistBuildStats",
 ]
 
 

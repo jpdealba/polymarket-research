@@ -36,6 +36,24 @@ class Settings:
     # Telegram alerting (Phase 17). Both must be set for Telegram notifications.
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    # Gamma markets/tokens incremental refresh cadence. Cheap (only open or
+    # missing-metadata condition_ids), so safe to shorten during live events.
+    markets_refresh_interval_minutes: int = 60
+    # Phase 18 World Cup forward microstructure watch. Disabled by default;
+    # when enabled, the existing collector service registers the recurring jobs.
+    worldcup_watch_enabled: bool = False
+    worldcup_wallet: str = ""
+    worldcup_watchlist_name: str = "world_cup_2026"
+    worldcup_book_interval_s: int = 10
+    worldcup_fast_book_interval_s: int = 5
+    worldcup_sync_interval_s: int = 60
+    worldcup_context_max_age_s: int = 30
+    worldcup_strict_context_max_age_s: int = 15
+    worldcup_sample_limit: int = 200
+    # Maker/taker enrichment for tracked World Cup wallets only, via PolygonScan
+    # block-log scanning. Only runs when PMR_SUBGRAPH_URL is unset (the daily,
+    # all-wallets run_enrichment_cycle already covers the subgraph case).
+    worldcup_enrichment_interval_s: int = 600
 
     @property
     def db_dir(self) -> Path:
@@ -79,6 +97,18 @@ def get_settings() -> Settings:
         book_retention_raw_days=int(_env("PMR_BOOK_RETENTION_RAW_DAYS", "30")),
         telegram_bot_token=_env("PMR_TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=_env("PMR_TELEGRAM_CHAT_ID", ""),
+        markets_refresh_interval_minutes=int(_env("PMR_MARKETS_REFRESH_INTERVAL_MINUTES", "60")),
+        worldcup_watch_enabled=_env("PMR_WORLDCUP_WATCH_ENABLED", "false").lower()
+        in ("1", "true", "yes", "on"),
+        worldcup_wallet=_env("PMR_WORLDCUP_WALLET", "").lower(),
+        worldcup_watchlist_name=_env("PMR_WORLDCUP_WATCHLIST_NAME", "world_cup_2026"),
+        worldcup_book_interval_s=int(_env("PMR_WORLDCUP_BOOK_INTERVAL_S", "10")),
+        worldcup_fast_book_interval_s=int(_env("PMR_WORLDCUP_FAST_BOOK_INTERVAL_S", "5")),
+        worldcup_sync_interval_s=int(_env("PMR_WORLDCUP_SYNC_INTERVAL_S", "60")),
+        worldcup_context_max_age_s=int(_env("PMR_WORLDCUP_CONTEXT_MAX_AGE_S", "30")),
+        worldcup_strict_context_max_age_s=int(_env("PMR_WORLDCUP_STRICT_CONTEXT_MAX_AGE_S", "15")),
+        worldcup_sample_limit=int(_env("PMR_WORLDCUP_SAMPLE_LIMIT", "200")),
+        worldcup_enrichment_interval_s=int(_env("PMR_WORLDCUP_ENRICHMENT_INTERVAL_S", "600")),
     )
 
 

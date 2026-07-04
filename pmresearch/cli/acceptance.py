@@ -238,7 +238,7 @@ def check_point_6_restore_drill() -> AcceptanceCheck:
     for d in drills:
         log_file = d / "drill.log"
         if log_file.exists():
-            log_text = log_file.read_text(encoding="utf-8")
+            log_text = log_file.read_text(encoding="utf-8", errors="replace")
             if "PASSED" in log_text:
                 return AcceptanceCheck(
                     point=6,

@@ -256,6 +256,29 @@ def _hypotheses(profile: WalletProfile) -> list[str]:
     return lines
 
 
+def _worldcup_forward_watch(profile: WalletProfile) -> list[str]:
+    section = profile.worldcup_forward
+    if section is None:
+        return []
+    lines = ["## World Cup Forward Watch", ""]
+    lines.append(f"- **Active watchlist tokens:** {section.active_watchlist_tokens}.")
+    lines.append(f"- **Latest sample time:** {section.latest_sample_time or 'never'}.")
+    lines.append(
+        f"- **Maker fills with excellent/good context:** "
+        f"{section.excellent_good_context} / {section.maker_fills_total}."
+    )
+    lines.append(f"- **Strict coverage:** {_pct(section.strict_coverage_share)}.")
+    lines.append(f"- **Loose coverage:** {_pct(section.loose_coverage_share)}.")
+    if section.excellent_good_context == 0:
+        lines.append("")
+        lines.append(
+            "_Insufficient forward book context. The collector has not been running "
+            "long enough before RN1 fills._"
+        )
+    lines.append("")
+    return lines
+
+
 def _reconciliation(profile: WalletProfile) -> list[str]:
     lines = ["## Reconciliation & trust", ""]
     rec = profile.reconciliation
@@ -348,6 +371,7 @@ def render_wallet_profile(profile: WalletProfile) -> str:
     lines.extend(_income_evidence(profile))
     lines.extend(_behavior_evidence(profile))
     lines.extend(_hypotheses(profile))
+    lines.extend(_worldcup_forward_watch(profile))
     lines.extend(_reconciliation(profile))
     lines.extend(_limitations(profile))
     return "\n".join(lines).rstrip() + "\n"

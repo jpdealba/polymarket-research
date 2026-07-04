@@ -32,6 +32,12 @@ from ..reconcile.runner import latest_reconciliation_result
 from ..reconcile.trust import WalletTrust, fetch_wallet_trust
 from ..detectors.compute import LabelRow, fetch_labels
 from ..fingerprints.compute import FingerprintRow, fetch_fingerprints
+from ..config import get_settings
+from ..worldcup.status import (
+    phase18_tables_exist,
+    worldcup_collector_status,
+    worldcup_context_coverage,
+)
 
 _ZERO = Decimal("0")
 
@@ -135,6 +141,16 @@ class ReconciliationSection:
 
 
 @dataclass(frozen=True)
+class WorldCupForwardSection:
+    active_watchlist_tokens: int
+    latest_sample_time: Optional[int]
+    excellent_good_context: int
+    strict_coverage_share: Decimal
+    loose_coverage_share: Decimal
+    maker_fills_total: int
+
+
+@dataclass(frozen=True)
 class WalletProfile:
     wallet: str
     generated_at: str
@@ -153,6 +169,7 @@ class WalletProfile:
     quality_features: tuple[FeatureValue, ...]
     hypotheses_all: tuple[HypothesisRow, ...]
     hypothesis_scopes: tuple[str, ...]
+    worldcup_forward: Optional[WorldCupForwardSection]
 
     @property
     def is_untrusted(self) -> bool:
@@ -314,6 +331,22 @@ def _reconciliation_section(
     return section, trust
 
 
+def _worldcup_forward_section(session: Session, wallet: str) -> Optional[WorldCupForwardSection]:
+    if not phase18_tables_exist(session):
+        return None
+    settings = get_settings()
+    status = worldcup_collector_status(session, settings)
+    coverage = worldcup_context_coverage(session, wallet=wallet)
+    return WorldCupForwardSection(
+        active_watchlist_tokens=status.active_tokens,
+        latest_sample_time=status.last_sample_run_ts,
+        excellent_good_context=coverage.strict_count,
+        strict_coverage_share=coverage.strict_share,
+        loose_coverage_share=coverage.loose_share,
+        maker_fills_total=coverage.total,
+    )
+
+
 def build_wallet_profile(
     session: Session, wallet: str, *, window: str = "all"
 ) -> WalletProfile:
@@ -361,4 +394,5 @@ def build_wallet_profile(
         quality_features=_feature_values(fmap, _QUALITY_FEATURES),
         hypotheses_all=_hypotheses(labels, "all"),
         hypothesis_scopes=hypothesis_scopes,
+        worldcup_forward=_worldcup_forward_section(session, wallet),
     )

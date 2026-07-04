@@ -162,22 +162,35 @@ class ClobSource:
         token_ids: list[str],
         *,
         per_token_delay_s: float = 0.0,
+        max_concurrency: int = 20,
     ) -> list[BookSnapshot]:
-        """Fetch books for multiple tokens with optional per-token throttle.
+        """Fetch books for multiple tokens, HTTP requests in flight concurrently.
 
-        Returns one BookSnapshot per token.  Errors on individual tokens are
-        logged and produce an empty snapshot (no crash, no abort).
+        The GET calls (thread-safe on the shared httpx.Client) run in a bounded
+        thread pool; every Raw Store write happens back on the caller's thread
+        afterward, in the original token order, since RawStore's SQLAlchemy
+        session is not thread-safe. Errors on individual tokens are logged and
+        produce an empty snapshot (no crash, no abort).
         """
-        import time
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _get(token_id: str):
+            try:
+                return token_id, self._adapter.get_json("/book", {"token_id": token_id}), None
+            except Exception as exc:  # noqa: BLE001 - reported per-token below
+                return token_id, None, exc
+
+        with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
+            fetched = dict(
+                (token_id, (response_payload, exc))
+                for token_id, response_payload, exc in executor.map(_get, token_ids)
+            )
 
         results: list[BookSnapshot] = []
-        for i, token_id in enumerate(token_ids):
-            try:
-                snap = self.fetch_book(raw_store, token_id)
-                results.append(snap)
-            except Exception:
-                logger.exception("Failed to fetch book for token %s", token_id)
-                # Append a synthetic empty snapshot so the count stays aligned.
+        for token_id in token_ids:
+            response_payload, exc = fetched[token_id]
+            if exc is not None:
+                logger.exception("Failed to fetch book for token %s", token_id, exc_info=exc)
                 results.append(BookSnapshot(
                     token_id=token_id,
                     best_bid=None,
@@ -190,6 +203,27 @@ class ClobSource:
                         content_hash="", row_count=0, deduped=False,
                     ),
                 ))
-            if per_token_delay_s > 0 and i < len(token_ids) - 1:
-                time.sleep(per_token_delay_s)
+                continue
+
+            response, payload = response_payload
+            raw_fetch = raw_store.persist(
+                source="clob",
+                endpoint="book",
+                wallet=token_id,
+                params={"token_id": token_id},
+                payload=payload if payload is not None else {},
+                http_status=response.status_code,
+            )
+            if payload is None:
+                results.append(BookSnapshot(
+                    token_id=token_id,
+                    best_bid=None,
+                    best_ask=None,
+                    spread=None,
+                    mid=None,
+                    depth_top=None,
+                    raw_fetch=raw_fetch,
+                ))
+            else:
+                results.append(_parse_book(token_id, payload, raw_fetch))
         return results

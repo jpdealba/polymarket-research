@@ -1,10 +1,13 @@
-.PHONY: test up down build backup restore-drill
+.PHONY: test up down build backup restore-drill run-local
 
 test:
 	pytest
 
 up:
 	docker compose up --build
+
+run-local:
+	pwsh -File ops/run_local.ps1
 
 down:
 	docker compose down

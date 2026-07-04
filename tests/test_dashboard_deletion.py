@@ -35,7 +35,10 @@ def test_core_suite_passes_without_dashboard():
             timeout=300,
         )
     finally:
-        shutil.move(str(DISABLED_DIR), str(DASHBOARD_DIR))
+        if DISABLED_DIR.exists():
+            if DASHBOARD_DIR.exists():
+                shutil.rmtree(str(DASHBOARD_DIR))
+            shutil.move(str(DISABLED_DIR), str(DASHBOARD_DIR))
 
     assert result.returncode == 0, (
         f"Core test suite failed with apps/dashboard removed:\n"

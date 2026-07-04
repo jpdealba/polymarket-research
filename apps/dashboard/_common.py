@@ -73,11 +73,21 @@ def wallet_selector():
     if not addresses:
         st.warning("No wallets on the watchlist. Run `pmr wallet add <addr>` first.")
         st.stop()
-    return st.sidebar.selectbox(
-        "Wallet",
-        addresses,
-        format_func=lambda a: next((w.display_name or a for w in wallets if w.address == a), a),
-    )
+
+    prev = st.session_state.get("selected_wallet")
+    idx = addresses.index(prev) if prev in addresses else 0
+
+    with st.sidebar:
+        selected = st.selectbox(
+            "Wallet",
+            addresses,
+            index=idx,
+            format_func=lambda a: next(
+                (w.display_name or a for w in wallets if w.address == a), a
+            ),
+        )
+    st.session_state["selected_wallet"] = selected
+    return selected
 
 
 def metric_card(label: str, value: str, delta: str | None = None, fmt: str = "normal"):

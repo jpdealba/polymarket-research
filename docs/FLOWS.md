@@ -90,6 +90,7 @@ pmr fees compute --wallet 0x...
 # 2. Ver reporte de fees por categoría
 pmr fees report --wallet 0x... --by-category --pre-post-sports-fee
 
+pmr derive run --wallet <addr>
 # 3. Ver descomposición de PnL
 pmr pnl show --wallet 0x... --by-category
 ```
@@ -206,6 +207,44 @@ pmr books status
 # 3. Limpiar snapshots antiguos
 pmr books prune
 ```
+
+---
+
+
+## World Cup forward watch
+
+El collector permanente de Docker usa esta seleccion cuando
+`PMR_WORLDCUP_WATCH_ENABLED=true`. Se pueden rastrear maximo 2 wallets.
+
+```bash
+# 1. Migrar tablas de Phase 18
+pmr db upgrade
+
+# 2. Seleccionar wallets a rastrear (reemplaza la seleccion anterior)
+pmr worldcup wallets set 0xwallet1 0xwallet2
+
+# 3. Ver seleccion activa
+pmr worldcup wallets list
+
+# 4. Construir/actualizar watchlist World Cup manualmente si hace falta
+pmr watchlist build-world-cup --wallet 0xwallet1
+pmr watchlist build-world-cup --wallet 0xwallet2
+
+# 5. Tomar una muestra manual de libros de la watchlist
+pmr books sample-watchlist --name world_cup_2026 --limit 200
+
+# 6. Construir contexto maker-fill manualmente
+pmr context maker-fills --wallet 0xwallet1 --watchlist world_cup_2026 --max-age-s 60
+
+# 7. Ejecutar un ciclo completo manual para una wallet
+pmr worldcup tick --wallet 0xwallet1
+
+# 8. Limpiar seleccion si se quiere pausar el rastreo de wallets
+pmr worldcup wallets clear
+```
+
+En servidor no se debe crear otro writer permanente. El servicio existente
+`collector` registra los jobs World Cup y lee la seleccion desde la DB.
 
 ---
 

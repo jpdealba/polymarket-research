@@ -34,6 +34,32 @@ def books_sample_once(max_tokens: int) -> None:
     )
 
 
+@books_group.command("sample-watchlist")
+@click.option("--name", "name", required=True)
+@click.option("--limit", "limit", default=None, type=int)
+@click.option("--wallet", "wallet", default=None, help="Optional selector wallet for run metadata.")
+def books_sample_watchlist(name: str, limit: int | None, wallet: str | None) -> None:
+    """Snapshot orderbooks for active tokens in a named watchlist."""
+    settings = get_settings()
+    ensure_data_dirs(settings)
+    setup_logging(settings)
+
+    from ..booksampler.watchlist import sample_watchlist_once
+
+    stats = sample_watchlist_once(
+        settings,
+        name=name,
+        limit=limit or settings.worldcup_sample_limit,
+        wallet=wallet,
+    )
+    click.echo(
+        f"run_id={stats.run_id} watchlist_id={stats.watchlist_id} "
+        f"selected={stats.tokens_selected} sampled={stats.tokens_sampled} "
+        f"written={stats.snapshots_written} found={stats.books_found} "
+        f"empty={stats.empty_books} errors={stats.errors} status={stats.status}"
+    )
+
+
 @books_group.command("status")
 def books_status() -> None:
     """Show book sampler status: tracked tokens, snapshot counts, storage."""

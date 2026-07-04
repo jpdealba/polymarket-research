@@ -1,0 +1,4 @@
+worldcup_enabled=True
+worldcup_wallet_fallback=<db-selected>
+max_tracked_wallets=2
+jobs=worldcup_book_sample,worldcup_context,worldcup_fast_book_sample,worldcup_sync,worldcup_watchlist_rebuild

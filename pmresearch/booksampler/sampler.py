@@ -42,7 +42,15 @@ class SampleStats:
     total_relevant: int
 
 
-def _persist_snapshot(session, raw_store: RawStore, snap: BookSnapshot) -> bool:
+def _persist_snapshot(
+    session,
+    raw_store: RawStore,
+    snap: BookSnapshot,
+    *,
+    sample_run_id: int | None = None,
+    watchlist_id: int | None = None,
+    selector_reason: str | None = None,
+) -> bool:
     """Insert a book_snapshots row.  Returns True if a new row was written."""
     if snap.raw_fetch.raw_fetch_id == 0:
         # Synthetic empty from a fetch error — skip DB write.
@@ -75,8 +83,10 @@ def _persist_snapshot(session, raw_store: RawStore, snap: BookSnapshot) -> bool:
     session.execute(
         text(
             "INSERT INTO book_snapshots "
-            "(token_id, ts, best_bid, best_ask, spread, mid, depth_top_json, raw_ref) "
-            "VALUES (:token_id, :ts, :best_bid, :best_ask, :spread, :mid, :depth_json, :raw_ref)"
+            "(token_id, ts, best_bid, best_ask, spread, mid, depth_top_json, raw_ref, "
+            "sample_run_id, watchlist_id, selector_reason) "
+            "VALUES (:token_id, :ts, :best_bid, :best_ask, :spread, :mid, :depth_json, "
+            ":raw_ref, :sample_run_id, :watchlist_id, :selector_reason)"
         ),
         {
             "token_id": snap.token_id,
@@ -87,6 +97,9 @@ def _persist_snapshot(session, raw_store: RawStore, snap: BookSnapshot) -> bool:
             "mid": str(snap.mid) if snap.mid is not None else None,
             "depth_json": depth_json,
             "raw_ref": snap.raw_fetch.raw_fetch_id if snap.raw_fetch.raw_fetch_id else None,
+            "sample_run_id": sample_run_id,
+            "watchlist_id": watchlist_id,
+            "selector_reason": selector_reason,
         },
     )
     session.commit()

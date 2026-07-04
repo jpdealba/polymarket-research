@@ -3,10 +3,13 @@ the markets/pm_events/tokens tables — no new computation, just metadata fetche
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Optional
 
 from sqlalchemy import text
+
+_CHUNK_SIZE = 500
 
 
 @dataclass(frozen=True)
@@ -25,22 +28,40 @@ class EventLabel:
     slug: Optional[str]
 
 
+def _chunked_select(
+    session,
+    base_query: str,
+    ids: list[str],
+    col: str,
+    prefix: str,
+) -> list:
+    """Run ``SELECT ... WHERE col IN (...)`` in chunks to stay within
+    SQLite's 999-bound-parameter limit."""
+    all_rows: list = []
+    for start in range(0, len(ids), _CHUNK_SIZE):
+        chunk = ids[start : start + _CHUNK_SIZE]
+        placeholders = ", ".join(f":{prefix}{i}" for i in range(len(chunk)))
+        params = {f"{prefix}{i}": v for i, v in enumerate(chunk)}
+        rows = session.execute(
+            text(f"{base_query} WHERE {col} IN ({placeholders})"), params
+        ).fetchall()
+        all_rows.extend(rows)
+    return all_rows
+
+
 def resolve_market_labels(session, condition_ids: list[str]) -> dict[str, MarketLabel]:
     """Batch-resolve condition_id -> MarketLabel."""
     if not condition_ids:
         return {}
-    placeholders = ", ".join(f":c{i}" for i in range(len(condition_ids)))
-    rows = session.execute(
-        text(
-            f"SELECT condition_id, question, category, outcomes_json, event_id "
-            f"FROM markets WHERE condition_id IN ({placeholders})"
-        ),
-        {f"c{i}": cid for i, cid in enumerate(condition_ids)},
-    ).fetchall()
+    rows = _chunked_select(
+        session,
+        "SELECT condition_id, question, category, outcomes_json, event_id FROM markets",
+        condition_ids,
+        "condition_id",
+        "c",
+    )
     result = {}
     for r in rows:
-        import json
-
         outcomes = json.loads(r.outcomes_json) if r.outcomes_json else []
         result[r.condition_id] = MarketLabel(
             condition_id=r.condition_id,
@@ -56,14 +77,13 @@ def resolve_event_labels(session, event_ids: list[str]) -> dict[str, EventLabel]
     """Batch-resolve event_id -> EventLabel."""
     if not event_ids:
         return {}
-    placeholders = ", ".join(f":e{i}" for i in range(len(event_ids)))
-    rows = session.execute(
-        text(
-            f"SELECT event_id, title, slug "
-            f"FROM pm_events WHERE event_id IN ({placeholders})"
-        ),
-        {f"e{i}": eid for i, eid in enumerate(event_ids)},
-    ).fetchall()
+    rows = _chunked_select(
+        session,
+        "SELECT event_id, title, slug FROM pm_events",
+        event_ids,
+        "event_id",
+        "e",
+    )
     return {
         r.event_id: EventLabel(
             event_id=r.event_id,
