@@ -23,6 +23,7 @@ from .reconcile import reconcile_group, trust_group
 from .replay import holdings_group, replay_group
 from .sync import sync_group
 from .wallets import wallet_group
+from .books import books_group
 
 
 @click.group()
@@ -46,6 +47,7 @@ main.add_command(pnl_group)
 main.add_command(equity_group)
 main.add_command(exposure_group)
 main.add_command(enrich_group)
+main.add_command(books_group)
 replay_group.add_command(replay_episodes)
 
 

@@ -30,6 +30,8 @@ logger = logging.getLogger(__name__)
 INCREMENTAL_INTERVAL_MINUTES = 5
 MARKETS_REFRESH_INTERVAL_MINUTES = 60
 ENRICHMENT_INTERVAL_HOURS = 24
+BOOK_SAMPLE_INTERVAL_MINUTES = 5
+BOOK_PRUNE_INTERVAL_HOURS = 24
 
 
 def _fetch_and_upsert_markets(
@@ -230,6 +232,48 @@ def run_enrichment_cycle(settings: Settings) -> None:
         session.close()
 
 
+def run_book_sample_cycle(settings: Settings) -> None:
+    """Periodic orderbook sampling for Relevant Tokens.  No-ops when
+    book_sample_interval_s is 0 (disabled).  Isolated from sync jobs."""
+    if settings.book_sample_interval_s <= 0:
+        return
+
+    from ..booksampler.sampler import sample_once
+
+    try:
+        stats = sample_once(settings)
+        logger.info(
+            "Book sample: queried=%d written=%d found=%d empty=%d errors=%d relevant=%d",
+            stats.tokens_queried,
+            stats.snapshots_written,
+            stats.books_found,
+            stats.empty_books,
+            stats.errors,
+            stats.total_relevant,
+        )
+    except Exception:
+        logger.exception("Book sample cycle failed")
+
+
+def run_book_prune_cycle(settings: Settings) -> None:
+    """Daily prune of raw book snapshot files beyond the retention window."""
+    from ..booksampler.retention import prune_raw_books
+
+    session = get_session_factory(settings)()
+    try:
+        stats = prune_raw_books(session, settings)
+        if stats.snapshots_checked > 0:
+            logger.info(
+                "Book prune: files_deleted=%d freed=%d bytes",
+                stats.raw_files_deleted,
+                stats.bytes_freed,
+            )
+    except Exception:
+        logger.exception("Book prune cycle failed")
+    finally:
+        session.close()
+
+
 def build_scheduler(settings: Settings) -> BlockingScheduler:
     scheduler = BlockingScheduler()
     scheduler.add_job(
@@ -266,6 +310,25 @@ def build_scheduler(settings: Settings) -> BlockingScheduler:
         hours=ENRICHMENT_INTERVAL_HOURS,
         args=[settings],
         id="enrichment",
+        max_instances=1,
+        coalesce=True,
+    )
+    if settings.book_sample_interval_s > 0:
+        scheduler.add_job(
+            run_book_sample_cycle,
+            "interval",
+            seconds=settings.book_sample_interval_s,
+            args=[settings],
+            id="book_sample",
+            max_instances=1,
+            coalesce=True,
+        )
+    scheduler.add_job(
+        run_book_prune_cycle,
+        "interval",
+        hours=BOOK_PRUNE_INTERVAL_HOURS,
+        args=[settings],
+        id="book_prune",
         max_instances=1,
         coalesce=True,
     )

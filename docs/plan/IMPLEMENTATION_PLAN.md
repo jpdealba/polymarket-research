@@ -534,6 +534,19 @@ Amount-conversion approach: on-chain amounts are 6-decimal fixed-point integers;
 
 **Prompt:** `Implement Phase 12 of IMPLEMENTATION_PLAN.md exactly as scoped. Relevant tokens only, retention and storage budget from day one, isolated from sync jobs. Show me books status after an hour of sampling and prove retention pruning works. Commit when acceptance criteria pass.`
 
+**Implementation checklist:**
+
+- [x] `m0013` migration for `book_snapshots` and `_book_sampler_state`.
+- [x] `pmresearch/sources/clob.py` — CLOB `/book` adapter with Raw Store persistence.
+- [x] `pmresearch/booksampler/relevant.py` — Relevant Tokens query (holdings + recent trades, exclude closed).
+- [x] `pmresearch/booksampler/sampler.py` — poll loop with rotation, throttle, dedup.
+- [x] `pmresearch/booksampler/retention.py` — raw file pruning, raw_ref nulling.
+- [x] `pmresearch/cli/books.py` — `sample-once`, `status`, `prune` commands.
+- [x] Scheduler wiring: `book_sample` (configurable interval) + `book_prune` (daily).
+- [x] Config: `book_sample_interval_s`, `book_retention_raw_days`.
+- [x] Tests: 20 tests covering CLOB parse, relevant tokens, sampler, retention.
+- [x] Manual RN1 walkthrough — deferred (no live data loaded locally).
+
 ---
 
 

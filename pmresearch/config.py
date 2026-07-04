@@ -22,9 +22,17 @@ class Settings:
     # Goldsky orderbook subgraph endpoint (Phase 11 enrichment). Empty = the
     # subgraph is not configured, so enrichment is skipped / errors clearly.
     subgraph_url: str = ""
+    # Etherscan V2 (PolygonScan) API key — free-tier maker/taker source that
+    # paginates by results, immune to RPC block-range caps. Empty = off.
+    polygonscan_api_key: str = ""
     # Holdings below this many shares (absolute) count as flat — the source
     # reports 6-decimal sizes, so anything under 1e-6 is rounding residue.
     dust_epsilon: Decimal = Decimal("0.000001")
+    # Book sampler interval in seconds (Phase 12). 0 = disabled.
+    book_sample_interval_s: int = 300
+    # Days to retain raw book snapshots before pruning (Phase 12).
+    # Summary rows (best_bid/ask/spread/mid) are kept indefinitely.
+    book_retention_raw_days: int = 30
 
     @property
     def db_dir(self) -> Path:
@@ -62,7 +70,10 @@ def get_settings() -> Settings:
         rpc_url=_env("PMR_RPC_URL", ""),
         rclone_remote=_env("PMR_RCLONE_REMOTE", ""),
         subgraph_url=_env("PMR_SUBGRAPH_URL", ""),
+        polygonscan_api_key=_env("PMR_POLYGONSCAN_API_KEY", ""),
         dust_epsilon=Decimal(_env("PMR_DUST_EPSILON", "0.000001")),
+        book_sample_interval_s=int(_env("PMR_BOOK_SAMPLE_INTERVAL_S", "300")),
+        book_retention_raw_days=int(_env("PMR_BOOK_RETENTION_RAW_DAYS", "30")),
     )
 
 
