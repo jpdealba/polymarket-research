@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from ..config import Settings, ensure_data_dirs, get_settings
 from ..db.engine import get_session_factory
+from ..db.migrations import upgrade_to_head
 from ..logging_setup import setup_logging
 from ..walletmanager.manager import get_sync_state, list_wallets
 
@@ -55,11 +56,11 @@ def check_point_1_wallets(session: Session) -> AcceptanceCheck:
 def check_point_2_sync_uptime(
     session: Session, settings: Settings, *, min_days: int = 7
 ) -> AcceptanceCheck:
-    """ADR 0006 #2: Full backfill + ≥7 days stable incremental sync."""
+    """ADR 0006 #2: Full backfill + >=7 days stable incremental sync."""
     wallets = list_wallets(session, active_only=True)
     if not wallets:
         return AcceptanceCheck(
-            point=2, title="Sync uptime (≥7 days)", status="fail",
+            point=2, title="Sync uptime (>=7 days)", status="fail",
             evidence="No active wallets.",
         )
 
@@ -102,7 +103,7 @@ def check_point_2_sync_uptime(
     status = "pass" if all_ok else "fail"
     return AcceptanceCheck(
         point=2,
-        title=f"Sync uptime (≥{min_days} days)",
+        title=f"Sync uptime (>={min_days} days)",
         status=status,
         evidence="; ".join(details),
     )
@@ -144,16 +145,17 @@ def check_point_3_projections(session: Session, settings: Settings) -> Acceptanc
 
 
 def check_point_4_detectors(session: Session) -> AcceptanceCheck:
-    """ADR 0006 #4: Fingerprints + ≥3 scored detectors with evidence."""
+    """ADR 0006 #4: Fingerprints + >=3 scored detectors with evidence."""
     from ..detectors.compute import all_detectors, fetch_labels
 
     detectors = all_detectors()
+    detector_names = [d.name for d in detectors]
     if len(detectors) < 3:
         return AcceptanceCheck(
             point=4,
-            title="Detectors (≥3 scored)",
+            title="Detectors (>=3 scored)",
             status="fail",
-            evidence=f"Only {len(detectors)} detectors registered: {detectors}",
+            evidence=f"Only {len(detectors)} detectors registered: {detector_names}",
         )
 
     # Check labels exist for any wallet
@@ -166,16 +168,16 @@ def check_point_4_detectors(session: Session) -> AcceptanceCheck:
     if labels_found == 0:
         return AcceptanceCheck(
             point=4,
-            title="Detectors (≥3 scored)",
+            title="Detectors (>=3 scored)",
             status="fail",
             evidence=f"{len(detectors)} detectors registered but 0 labels stored.",
         )
 
     return AcceptanceCheck(
         point=4,
-        title="Detectors (≥3 scored)",
+        title="Detectors (>=3 scored)",
         status="pass",
-        evidence=f"{len(detectors)} detectors: {', '.join(detectors)}. {labels_found} labels stored.",
+        evidence=f"{len(detectors)} detectors: {', '.join(detector_names)}. {labels_found} labels stored.",
     )
 
 
@@ -324,6 +326,7 @@ def acceptance(json_output: bool) -> None:
     settings = get_settings()
     ensure_data_dirs(settings)
     setup_logging(settings)
+    upgrade_to_head(settings)
 
     checks = run_acceptance_checks(settings)
 
