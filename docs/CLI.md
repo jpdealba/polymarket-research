@@ -170,9 +170,9 @@ Todos los comandos aceptan `--help` para ver la ayuda integrada.
 
 | Comando | Parametros | Que hace |
 | --- | --- | --- |
-| `pmr fingerprints compute` | `--wallet TEXT` (opcional) | Calcula features behaviorales: maker_fill_share, reward_income_share, bond_inventory_ratio, merge_frequency, episode_duration, etc. Por wallet y wallet×categoria. NULL cuando no computable. |
-| `pmr fingerprints show` | `--wallet TEXT` (requerido); `--scope TEXT` (opcional) | Muestra vector de fingerprint: features, valores, version, ventana. |
-| `pmr fingerprints compare` | `--wallets TEXT` (requerido, separadas por coma) | Compara fingerprints de multiples wallets lado a lado. |
+| `pmr fingerprints compute` | `--wallet TEXT` (opcional) | Calcula features behaviorales (funciones puras sobre proyecciones): maker/taker_fill_share, enrichment_coverage, reward_income_share, realized/unrealized_pnl, bond_inventory_ratio, merge/redeem_frequency, episode_count, episode_duration_p50/p90, micro_episode_share, adds_per_episode, partial_exit_frequency, avg/median_position_size, market_category_concentration (HHI), time_to_event_start_at_entry, entry_price_distribution, resolution_outcome_calibration, stale_mark_share. Por scope (`all` + `category:<Label>`) y ventana (`all` + `90d`). NULL-con-razon cuando no computable, nunca 0 silencioso. |
+| `pmr fingerprints show` | `--wallet TEXT` (requerido); `--scope TEXT` (default `all`); `--window TEXT` (default `all`) | Muestra el fingerprint de un scope/ventana agrupado por familia: valor o `NULL (razon)`, con version y computed_at. |
+| `pmr fingerprints compare` | `--wallets TEXT` (requerido, separadas por coma); `--scope TEXT` (default `all`); `--window TEXT` (default `all`) | Compara fingerprints de multiples wallets lado a lado, una columna por wallet. |
 
 ### detect (Fase 14)
 

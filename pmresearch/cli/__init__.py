@@ -16,6 +16,7 @@ from .episodes import episodes_group, replay_episodes
 from .equity import equity_group
 from .exposure import exposure_group
 from .fees import fees_group
+from .fingerprints import fingerprints_group
 from .ingest import ingest_group, ledger_group
 from .markets import markets_group
 from .pnl import derive_group, pnl_group
@@ -48,6 +49,7 @@ main.add_command(equity_group)
 main.add_command(exposure_group)
 main.add_command(enrich_group)
 main.add_command(books_group)
+main.add_command(fingerprints_group)
 replay_group.add_command(replay_episodes)
 
 
