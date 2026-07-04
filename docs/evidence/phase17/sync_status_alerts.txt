@@ -1,0 +1,4 @@
+0x2005d16a84ceefa912d4e380cd32e7ff827875ea: status=incremental [STALE] backfill_complete=True last_success_at=2026-07-04T11:14:47.991638+00:00 consecutive_failures=0 last_error=-
+
+Alerts:
+  [WARNING] sync_stale: Wallet 0x2005d16a84ceefa912d4e380cd32e7ff827875ea is STALE — last success 2026-07-04T11:14:47.991638+00:00 (3.3h ago)

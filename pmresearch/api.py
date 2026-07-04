@@ -52,6 +52,14 @@ from .walletmanager.manager import (
     list_sync_states,
     list_wallets,
 )
+from .labels import (
+    EventLabel,
+    MarketLabel,
+    get_event_title,
+    get_market_question,
+    resolve_event_labels,
+    resolve_market_labels,
+)
 # Phase 17 — alerting
 from .alerts import check_wallet_alerts, AlertSeverity, WalletAlert
 
@@ -93,6 +101,12 @@ __all__ = [
     "fetch_events_by_ids",
     "book_sampler_status",
     "BookSamplerStatus",
+    "resolve_market_labels",
+    "resolve_event_labels",
+    "get_market_question",
+    "get_event_title",
+    "MarketLabel",
+    "EventLabel",
     "check_wallet_alerts",
     "AlertSeverity",
     "WalletAlert",

@@ -56,9 +56,6 @@ else:
     c7.metric("Micro Episodes", stats.micro_episode_count)
     c8.metric("Micro Episode Share", f"{float(stats.micro_episode_share) * 100:.1f}%")
 
-    c9, c10 = st.columns(2)
-    c9.metric("Realized PnL", format_decimal(stats.realized_pnl))
-    c10.metric("Reward Income", format_decimal(stats.reward_income))
 
 # ── Duration histogram ──────────────────────────────────────────────────────
 

@@ -53,7 +53,7 @@ else:
 
 # ── Fee attribution: maker/taker split ───────────────────────────────────────
 
-st.subheader("Fee Attribution: Maker/Taker Split")
+st.subheader("Maker/Taker Execution Split")
 if not fee_rows:
     st.info("No fee attribution computed yet. Run `pmr fees report` first.")
 else:

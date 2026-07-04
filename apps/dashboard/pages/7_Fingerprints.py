@@ -46,39 +46,57 @@ st.dataframe(
     use_container_width=True,
 )
 
-# ── Feature bar chart ────────────────────────────────────────────────────────
+# ── Feature bar charts by family ─────────────────────────────────────────────
 
 if scalar_rows:
-    st.subheader("Feature Values (Scalar)")
-    features = [r.feature for r in scalar_rows]
-    values = []
-    for r in scalar_rows:
-        try:
-            values.append(float(r.value))
-        except (TypeError, ValueError):
-            values.append(0.0)
+    st.subheader("Feature Values by Family")
 
-    fig = go.Figure(
-        go.Bar(
-            x=features,
-            y=values,
-            marker_color=COLORS["directional"],
-            text=[f"{v:.4f}" for v in values],
-            textposition="outside",
-            hovertemplate="%{x}: %{y:.4f}<extra></extra>",
-        )
-    )
-    fig.update_layout(
-        **_merge_layout(
-            dict(
-                title="Scalar Feature Values",
-                xaxis_title="Feature",
-                yaxis_title="Value",
-                showlegend=False,
+    families: dict[str, list] = {}
+    for r in scalar_rows:
+        fam = r.family or "other"
+        families.setdefault(fam, []).append(r)
+
+    family_colors = {
+        "episodes": COLORS["directional"],
+        "pnl": COLORS["reward"],
+        "exposure": COLORS["bond"],
+        "execution": COLORS["positive"],
+        "portfolio": COLORS["redemption"],
+        "other": COLORS["neutral"],
+    }
+
+    for fam, fam_rows in sorted(families.items()):
+        with st.expander(f"{fam.title()} ({len(fam_rows)} features)", expanded=True):
+            features = [r.feature for r in fam_rows]
+            values = []
+            for r in fam_rows:
+                try:
+                    values.append(float(r.value))
+                except (TypeError, ValueError):
+                    values.append(0.0)
+
+            fig = go.Figure(
+                go.Bar(
+                    x=features,
+                    y=values,
+                    marker_color=family_colors.get(fam, COLORS["neutral"]),
+                    text=[f"{v:.4f}" for v in values],
+                    textposition="outside",
+                    hovertemplate="%{x}: %{y:.4f}<extra></extra>",
+                )
             )
-        )
-    )
-    st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
+            fig.update_layout(
+                **_merge_layout(
+                    dict(
+                        title=f"{fam.title()} Features",
+                        xaxis_title="Feature",
+                        yaxis_title="Value",
+                        showlegend=False,
+                        height=max(300, len(features) * 35),
+                    )
+                )
+            )
+            st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
 
 # ── Percentile vs watchlist ──────────────────────────────────────────────────
 

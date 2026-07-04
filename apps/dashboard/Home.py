@@ -88,6 +88,12 @@ else:
 
 # ── Equity curve ─────────────────────────────────────────────────────────────
 
+st.info(
+    "**Portfolio Value** is the current marked value of open positions. "
+    "**Cumulative PnL** includes realized PnL + reward income from closed episodes. "
+    "They are different metrics — Portfolio Value can go down while Cumulative PnL stays positive."
+)
+
 st.subheader("Equity Curve")
 if not all_equity:
     empty_state("No daily equity computed yet. Run `pmr equity build` first.")
