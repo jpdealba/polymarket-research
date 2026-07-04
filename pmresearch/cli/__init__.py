@@ -22,6 +22,7 @@ from .ingest import ingest_group, ledger_group
 from .markets import markets_group
 from .pnl import derive_group, pnl_group
 from .reconcile import reconcile_group, trust_group
+from .report import report_group
 from .replay import holdings_group, replay_group
 from .sync import sync_group
 from .wallets import wallet_group
@@ -52,6 +53,7 @@ main.add_command(enrich_group)
 main.add_command(books_group)
 main.add_command(fingerprints_group)
 main.add_command(detect_group)
+main.add_command(report_group)
 replay_group.add_command(replay_episodes)
 
 
