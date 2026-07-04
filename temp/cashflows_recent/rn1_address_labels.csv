@@ -1,0 +1,11 @@
+address,label,is_internal,notes
+0x4d97dcd97ec945f40cf65f87097ace5ea0476045,Polymarket CTF Exchange,true,confirmed from Polygonscan
+0xc5d563a36ae78145c45a50134d48a1215220f80a,Polymarket Neg Risk CTF Exchange,true,confirmed from Polygonscan
+0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e,Polymarket CTF Exchange,true,confirmed from Polygonscan
+0x3a3bd7bb9528e159577f7c2e685cc81a765002e2,Polymarket Wrapped Collateral,true,confirmed from Polygonscan
+0xf5042e6ffac5a625d4e7848e0b01373d8eb9e222,external wallet,false,no Polymarket label
+0xf70da97812cb96acdf810712aa562db8dfa3dbef,external wallet,false,no Polymarket label
+0xe111180000d2663c0091e4f400237545b87b996b,Polymarket CTF Exchange V2,true,confirmed from Polygonscan
+0xe2222d279d744050d28e00520010520000310f59,Polymarket Neg Risk CTF Exchange V2,true,confirmed from Polygonscan
+0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb,Polymarket pUSD token,true,confirmed from Polygonscan
+0xc417fd8e9661c0d2120b64a04bb3278c17e99db1,USDC.e reserve/collateral counterparty,false,paired with pUSD unwrap; treat separately

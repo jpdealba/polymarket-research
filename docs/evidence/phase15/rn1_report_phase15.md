@@ -1,6 +1,6 @@
 # Why is `0x2005d16a84ceefa912d4e380cd32e7ff827875ea` profitable?
 
-_Generated 2026-07-04T13:06:30.739224+00:00 · window `all` · fingerprint version 1_
+_Generated 2026-07-04T13:11:18.519705+00:00 · window `all` · fingerprint version 1_
 
 > ⚠️ **DATA QUALITY: trust = warn** — warn: timing_skew=9045, metadata_unavailable_upstream=51, wac_size_reconciliation_not_clean=10, wac_timing_skew=10
 
