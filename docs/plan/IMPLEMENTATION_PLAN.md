@@ -673,6 +673,17 @@ Amount-conversion approach: on-chain amounts are 6-decimal fixed-point integers;
 
 **Common failure modes:** drill performed against a fresh backup taken seconds before (must use the scheduled nightly one); soak "passing" because syncs silently stopped (uptime must be measured from sync_state history, not absence of errors); acceptance checklist hand-waved (the command + evidence doc exist precisely to prevent this).
 
+Restore drill must be non-destructive by default.
+
+The drill may never delete, move, replace, truncate, or mutate the active production DB under /data/db/.
+It must restore into an isolated temporary data directory under /data/restore_drills/<timestamp>/ and run replay/reconciliation/report generation against that restored copy.
+
+A destructive drill against the active DB is forbidden unless the operator passes an explicit --destructive-i-understand flag, and even then the script must:
+1. create a fresh backup first,
+2. verify that backup exists and is readable,
+3. require typing the active DB path manually,
+4. stop if PMR_DATA_DIR is not exactly the expected production data dir.
+
 **Prompt:** `Implement Phase 17 of IMPLEMENTATION_PLAN.md exactly as scoped. Run the real restore drill and capture logs, wire staleness alerts, implement pmr acceptance, and start the 7-day soak. At the end of the soak, produce docs/MVP_ACCEPTANCE.md with evidence for all seven ADR 0006 points. Commit when acceptance criteria pass.`
 
 ---
