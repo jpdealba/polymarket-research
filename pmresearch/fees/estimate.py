@@ -117,7 +117,7 @@ def _trade_count(session: Session, wallet: str | None) -> int:
     query = "SELECT COUNT(*) FROM wallet_events WHERE event_type = 'TRADE' "
     params = {}
     if wallet:
-        query += "AND lower(wallet) = lower(:wallet) "
+        query += "AND wallet = :wallet "
         params["wallet"] = wallet
     return int(session.execute(text(query), params).scalar() or 0)
 
@@ -127,12 +127,12 @@ def _trade_rows(session: Session, wallet: str | None, *, after_id: int, limit: i
         "SELECT we.id AS event_id, we.wallet, we.condition_id, we.token_id, we.side, "
         "we.ts, we.delta_shares, we.price, m.category AS market_category "
         "FROM wallet_events we "
-        "LEFT JOIN markets m ON m.condition_id = lower(we.condition_id) "
+        "LEFT JOIN markets m ON m.condition_id = we.condition_id "
         "WHERE we.event_type = 'TRADE' AND we.id > :after_id "
     )
     params = {"after_id": after_id, "limit": limit}
     if wallet:
-        query += "AND lower(we.wallet) = lower(:wallet) "
+        query += "AND we.wallet = :wallet "
         params["wallet"] = wallet
     query += "ORDER BY we.id LIMIT :limit"
     return session.execute(text(query), params).fetchall()

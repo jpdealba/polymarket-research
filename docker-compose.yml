@@ -6,3 +6,14 @@ services:
     environment:
       - PMR_DATA_DIR=/data
     restart: unless-stopped
+
+  dashboard:
+    build: .
+    volumes:
+      - ./data:/data
+    environment:
+      - PMR_DATA_DIR=/data
+    command: ["streamlit", "run", "apps/dashboard/Home.py", "--server.address=0.0.0.0", "--server.port=8501"]
+    ports:
+      - "8501:8501"
+    restart: unless-stopped

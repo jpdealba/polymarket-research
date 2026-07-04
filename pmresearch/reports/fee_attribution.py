@@ -117,10 +117,10 @@ def fee_attribution_report(
             "fe.estimated_fee, fe.worst_case_fee, fe.actual_fee, "
             "COALESCE(fe.fee_source, 'missing') AS fee_source, fen.role AS fill_role "
             "FROM wallet_events we "
-            "LEFT JOIN markets m ON m.condition_id = lower(we.condition_id) "
+            "LEFT JOIN markets m ON m.condition_id = we.condition_id "
             "LEFT JOIN fee_estimates fe ON fe.event_id = we.id "
             "LEFT JOIN fill_enrichment fen ON fen.event_id = we.id "
-            "WHERE lower(we.wallet) = lower(:wallet) "
+            "WHERE we.wallet = :wallet "
             "ORDER BY we.ts, we.id"
         ),
         {"wallet": wallet},
@@ -228,9 +228,9 @@ def fee_attribution_coverage(session: Session, *, wallet: str) -> FeeAttribution
             "SUM(CASE WHEN fe.actual_fee IS NOT NULL THEN CAST(fe.actual_fee AS REAL) "
             "ELSE COALESCE(CAST(fe.estimated_fee AS REAL), 0) END) AS blended_fee_total "
             "FROM wallet_events we "
-            "LEFT JOIN markets m ON m.condition_id = lower(we.condition_id) "
+            "LEFT JOIN markets m ON m.condition_id = we.condition_id "
             "LEFT JOIN fee_estimates fe ON fe.event_id = we.id "
-            "WHERE lower(we.wallet) = lower(:wallet) AND we.event_type = 'TRADE'"
+            "WHERE we.wallet = :wallet AND we.event_type = 'TRADE'"
         ),
         {"wallet": wallet},
     ).fetchone()

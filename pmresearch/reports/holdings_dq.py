@@ -233,7 +233,7 @@ def missing_conditions_report(session: Session, wallet: str) -> list[MissingCond
             "MIN(we.ts) first_ts, MAX(we.ts) last_ts "
             "FROM wallet_events we "
             "LEFT JOIN markets m ON m.condition_id = we.condition_id "
-            "WHERE lower(we.wallet) = lower(:w) AND we.condition_id IS NOT NULL AND m.condition_id IS NULL "
+            "WHERE we.wallet = :w AND we.condition_id IS NOT NULL AND m.condition_id IS NULL "
             "GROUP BY we.condition_id "
             "ORDER BY n_events DESC"
         ),

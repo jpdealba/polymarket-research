@@ -12,6 +12,7 @@ from ..config import ensure_data_dirs, get_settings
 from ..db.engine import get_session_factory
 from ..fees.estimate import compute_fee_estimates
 from ..ingest.runner import reparse_wallet, run_ingest_with_progress
+from ..ledger.stats import ledger_event_counts
 from ..logging_setup import setup_logging
 
 SPORTS_FEE_CUTOFF_TS = 1774828800  # 2026-03-30T00:00:00Z
@@ -118,7 +119,7 @@ def _post_cutoff_fee_scenario(session, wallet: str | None) -> dict[str, Decimal 
     )
     params: dict[str, object] = {"cutoff": SPORTS_FEE_CUTOFF_TS}
     if wallet:
-        query += " AND lower(we.wallet) = lower(:wallet)"
+        query += " AND we.wallet = :wallet"
         params["wallet"] = wallet
     rows = session.execute(text(query), params).fetchall()
     actual_rows = [row for row in rows if row.actual_fee is not None]
@@ -213,20 +214,13 @@ def ledger_stats(wallet: str | None, open_value: str) -> None:
     ensure_data_dirs(settings)
     session = get_session_factory(settings)()
     try:
-        query = (
-            "SELECT event_type, COUNT(*) AS cnt, MIN(ts) AS min_ts, MAX(ts) AS max_ts "
-            "FROM wallet_events"
-        )
-        params = {}
-        if wallet:
-            query += " WHERE wallet = :w"
-            params["w"] = wallet.lower()
-        query += " GROUP BY event_type ORDER BY cnt DESC"
-        rows = session.execute(text(query), params).fetchall()
+        rows = ledger_event_counts(session, wallet)
 
         detail_query = "SELECT event_type, side, delta_usdc, usdc_size, ts FROM wallet_events"
+        params = {}
         if wallet:
             detail_query += " WHERE wallet = :w"
+            params["w"] = wallet.lower()
         detail_rows = session.execute(text(detail_query), params).fetchall()
 
         fee_scenario = None
