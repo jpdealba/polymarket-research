@@ -1,0 +1,5 @@
+0x2005d16a84ceefa912d4e380cd32e7ff827875ea: trades=3704054 enriched=2492160 (67.28%) pending=1152957 ambiguous=58934 missing=3 subgraph_head_ts=1777373910
+  <=1d: total=2593 enriched=0 pending=2593 ambiguous=0 missing=0
+  1-7d: total=95475 enriched=0 pending=95475 ambiguous=0 missing=0
+  7-30d: total=405950 enriched=0 pending=405950 ambiguous=0 missing=0
+  >30d: total=3200036 enriched=2492160 pending=648939 ambiguous=58934 missing=3
