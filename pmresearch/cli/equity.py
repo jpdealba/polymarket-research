@@ -74,12 +74,16 @@ def equity_show(wallet: str, limit: int) -> None:
         f"latest_stale_share={_pct(rows[-1].stale_equity_share)} "
         f"max_drawdown={decimal_string(max(row.drawdown for row in rows))}"
     )
-    click.echo("date portfolio_value realized_pnl_cum unrealized_pnl reward_income_cum drawdown stale_equity_share")
+    click.echo(
+        "date portfolio_value realized_pnl_cum unrealized_pnl reward_income_cum "
+        "marked_pnl drawdown drawdown_basis stale_equity_share"
+    )
     for row in rows[-limit:]:
         click.echo(
             f"{row.date} {decimal_string(row.portfolio_value)} "
             f"{decimal_string(row.realized_pnl_cum)} {decimal_string(row.unrealized_pnl)} "
-            f"{decimal_string(row.reward_income_cum)} {decimal_string(row.drawdown)} "
+            f"{decimal_string(row.reward_income_cum)} {decimal_string(row.marked_pnl)} "
+            f"{decimal_string(row.drawdown)} {row.drawdown_basis} "
             f"{_pct(row.stale_equity_share)}"
         )
 

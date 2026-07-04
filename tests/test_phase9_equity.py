@@ -8,7 +8,11 @@ from sqlalchemy import text
 from pmresearch.marks.base import Mark
 from pmresearch.marks.prices_history import PricesHistoryMarkSource
 from pmresearch.marks.service import MarkService
-from pmresearch.projections.daily_equity import fetch_daily_equity, rebuild_daily_equity
+from pmresearch.projections.daily_equity import (
+    DAILY_EQUITY_DRAWDOWN_BASIS,
+    fetch_daily_equity,
+    rebuild_daily_equity,
+)
 from pmresearch.rawstore.store import RawStore
 from pmresearch.reconcile.checks import value_check_fact
 
@@ -108,6 +112,20 @@ class StaticMarkSource:
         )
 
 
+def _assert_marked_drawdown_consistency(rows):
+    peak = None
+    differences = []
+    for row in rows:
+        marked = row.realized_pnl_cum + row.unrealized_pnl + row.reward_income_cum
+        peak = marked if peak is None else max(peak, marked)
+        assert row.marked_pnl == marked
+        expected_drawdown = peak - marked
+        if row.drawdown != expected_drawdown:
+            differences.append((row.date, row.drawdown, expected_drawdown))
+        assert row.drawdown_basis == DAILY_EQUITY_DRAWDOWN_BASIS
+    assert differences == []
+
+
 def test_resolution_mark_overrides_fresher_cached_point(session):
     _seed_market(session, closed=1, prices={"tok_a": "1", "tok_b": "0"})
     target_ts = _ts(date(2026, 1, 2))
@@ -194,7 +212,89 @@ def test_daily_equity_golden_fixture_with_stale_share(session):
     assert rows[1].portfolio_value == Decimal("2.9")
     assert rows[1].realized_pnl_cum == Decimal("0.8")
     assert rows[1].unrealized_pnl == Decimal("-0.5")
-    assert rows[1].drawdown == Decimal("2.3")
+    assert rows[1].marked_pnl == Decimal("0.3")
+    assert rows[1].account_equity == Decimal("3.7")
+    assert rows[1].drawdown == Decimal("0.7")
+    _assert_marked_drawdown_consistency(rows)
+
+
+def test_daily_equity_drawdown_uses_marked_pnl_when_realized_and_unrealized_offset(session):
+    wallet = "0xrn1drawdown"
+    _seed_market(session)
+    day1 = date(2026, 3, 7)
+    day2 = date(2026, 3, 8)
+    _seed_ledger(
+        session,
+        wallet,
+        [
+            {
+                "type": "TRADE",
+                "ts": _ts(day1) - 600,
+                "token_id": "tok_b",
+                "delta_shares": "1",
+                "delta_usdc": "0",
+            },
+            {
+                "type": "TRADE",
+                "ts": _ts(day1) - 500,
+                "token_id": "tok_b",
+                "delta_shares": "-1",
+                "delta_usdc": "10095757.067828942",
+            },
+            {
+                "type": "TRADE",
+                "ts": _ts(day1) - 400,
+                "token_id": "tok_a",
+                "delta_shares": "1",
+                "delta_usdc": "-5898079.933995848",
+            },
+            {
+                "type": "REWARD",
+                "ts": _ts(day1) - 300,
+                "delta_usdc": "43.3524",
+            },
+            {
+                "type": "TRADE",
+                "ts": _ts(day2) - 500,
+                "token_id": "tok_a",
+                "delta_shares": "-1",
+                "delta_usdc": "61907.29408396",
+            },
+            {
+                "type": "TRADE",
+                "ts": _ts(day2) - 400,
+                "token_id": "tok_b",
+                "delta_shares": "1",
+                "delta_usdc": "-6177.987991793",
+            },
+        ],
+    )
+    marks = {
+        ("tok_a", _ts(day1)): ("69595.842857", False, 10),
+        ("tok_b", _ts(day2)): ("6326.56866", False, 10),
+    }
+    service = MarkService([StaticMarkSource(marks)])
+
+    rebuild_daily_equity(
+        session,
+        wallet,
+        mark_service=service,
+        dust_epsilon=DUST,
+        through_date=day2,
+    )
+    rows = fetch_daily_equity(session, wallet)
+
+    assert [row.date for row in rows] == ["2026-03-07", "2026-03-08"]
+    assert rows[0].realized_pnl_cum == Decimal("10095757.067828942")
+    assert rows[0].unrealized_pnl == Decimal("-5828484.091138848")
+    assert rows[0].marked_pnl == Decimal("4267316.329090094")
+    assert rows[1].realized_pnl_cum == Decimal("4259584.427917054")
+    assert rows[1].unrealized_pnl == Decimal("148.580668207")
+    assert rows[1].marked_pnl == Decimal("4259776.360985261")
+    assert rows[1].drawdown < Decimal("10000")
+    assert rows[1].account_equity == Decimal("4265954.348977054")
+    assert rows[0].account_equity - rows[1].account_equity > Decimal("5800000")
+    _assert_marked_drawdown_consistency(rows)
 
 
 def test_daily_equity_rebuild_is_reproducible(session):

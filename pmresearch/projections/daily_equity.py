@@ -16,7 +16,8 @@ from ..marks.base import Mark
 from ..marks.service import MarkService
 from .base import Projection
 
-DAILY_EQUITY_PROJECTION_VERSION = 1
+DAILY_EQUITY_PROJECTION_VERSION = 2
+DAILY_EQUITY_DRAWDOWN_BASIS = "marked_pnl"
 _ZERO = Decimal("0")
 _DAY_END = time(23, 59, 59, tzinfo=timezone.utc)
 
@@ -51,12 +52,18 @@ class DailyEquityRow:
     realized_pnl_cum: Decimal
     unrealized_pnl: Decimal
     reward_income_cum: Decimal
+    marked_pnl: Decimal
     drawdown: Decimal
+    drawdown_basis: str
     stale_equity_share: Decimal
     projection_version: int
 
     @property
     def total_equity(self) -> Decimal:
+        return self.marked_pnl
+
+    @property
+    def account_equity(self) -> Decimal:
         return self.portfolio_value + self.realized_pnl_cum + self.reward_income_cum
 
 
@@ -132,15 +139,19 @@ _BOUNDS_SQL = text(
 _UPSERT_SQL = text(
     "INSERT INTO daily_equity "
     "(wallet, date, portfolio_value, realized_pnl_cum, unrealized_pnl, "
-    "reward_income_cum, drawdown, stale_equity_share, projection_version) "
+    "reward_income_cum, marked_pnl, drawdown, drawdown_basis, stale_equity_share, "
+    "projection_version) "
     "VALUES (:wallet, :date, :portfolio_value, :realized_pnl_cum, :unrealized_pnl, "
-    ":reward_income_cum, :drawdown, :stale_equity_share, :projection_version) "
+    ":reward_income_cum, :marked_pnl, :drawdown, :drawdown_basis, :stale_equity_share, "
+    ":projection_version) "
     "ON CONFLICT(wallet, date) DO UPDATE SET "
     "portfolio_value = excluded.portfolio_value, "
     "realized_pnl_cum = excluded.realized_pnl_cum, "
     "unrealized_pnl = excluded.unrealized_pnl, "
     "reward_income_cum = excluded.reward_income_cum, "
+    "marked_pnl = excluded.marked_pnl, "
     "drawdown = excluded.drawdown, "
+    "drawdown_basis = excluded.drawdown_basis, "
     "stale_equity_share = excluded.stale_equity_share, "
     "projection_version = excluded.projection_version"
 )
@@ -386,10 +397,10 @@ def rebuild_daily_equity(
                 stale_value += abs(value)
         stale_share = stale_value / gross_value if gross_value else _ZERO
         unrealized = portfolio_value - open_cost
-        total_equity = portfolio_value + realized_pnl + reward_income
-        if peak_equity is None or total_equity > peak_equity:
-            peak_equity = total_equity
-        drawdown = (peak_equity - total_equity) if peak_equity is not None else _ZERO
+        marked_pnl = realized_pnl + unrealized + reward_income
+        if peak_equity is None or marked_pnl > peak_equity:
+            peak_equity = marked_pnl
+        drawdown = (peak_equity - marked_pnl) if peak_equity is not None else _ZERO
         output_rows.append(
             {
                 "wallet": wallet,
@@ -398,7 +409,9 @@ def rebuild_daily_equity(
                 "realized_pnl_cum": str(realized_pnl),
                 "unrealized_pnl": str(unrealized),
                 "reward_income_cum": str(reward_income),
+                "marked_pnl": str(marked_pnl),
                 "drawdown": str(drawdown),
+                "drawdown_basis": DAILY_EQUITY_DRAWDOWN_BASIS,
                 "stale_equity_share": str(stale_share),
                 "projection_version": DAILY_EQUITY_PROJECTION_VERSION,
             }
@@ -512,7 +525,8 @@ def fetch_daily_equity(session: Session, wallet: str) -> list[DailyEquityRow]:
     rows = session.execute(
         text(
             "SELECT wallet, date, portfolio_value, realized_pnl_cum, unrealized_pnl, "
-            "reward_income_cum, drawdown, stale_equity_share, projection_version "
+            "reward_income_cum, marked_pnl, drawdown, drawdown_basis, stale_equity_share, "
+            "projection_version "
             "FROM daily_equity WHERE wallet = :wallet ORDER BY date"
         ),
         {"wallet": wallet.lower()},
@@ -525,7 +539,9 @@ def fetch_daily_equity(session: Session, wallet: str) -> list[DailyEquityRow]:
             realized_pnl_cum=_decimal(row.realized_pnl_cum),
             unrealized_pnl=_decimal(row.unrealized_pnl),
             reward_income_cum=_decimal(row.reward_income_cum),
+            marked_pnl=_decimal(row.marked_pnl),
             drawdown=_decimal(row.drawdown),
+            drawdown_basis=row.drawdown_basis,
             stale_equity_share=_decimal(row.stale_equity_share),
             projection_version=int(row.projection_version),
         )
