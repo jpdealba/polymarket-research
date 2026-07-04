@@ -179,7 +179,7 @@ def test_actual_fee_remains_unavailable_without_phase_11_enrichment(session):
     assert row.actual_net_pnl is None
 
 
-def test_enriched_trade_uses_fill_enrichment_fee_as_actual(session):
+def test_enriched_trade_does_not_use_unverified_fill_enrichment_fee_as_actual(session):
     upsert_market_payloads(session, ([_market(COND_SPORTS, category="Sports")],), [COND_SPORTS])
     event_id = _event(session, tx="0xactualfee", ts=SPORTS_FEE_START_TS, condition_id=COND_SPORTS)
     _enrichment(session, event_id, fee="0.125", role="maker", source="subgraph")
@@ -195,15 +195,15 @@ def test_enriched_trade_uses_fill_enrichment_fee_as_actual(session):
     report = fee_attribution_report(session, wallet=WALLET)[0]
 
     assert Decimal(fee.estimated_fee) == Decimal("0.3750")
-    assert Decimal(fee.actual_fee) == Decimal("0.125")
-    assert fee.fee_source == "actual_subgraph"
-    assert stats.actual_enriched_trades == 1
-    assert stats.actual_fee_total == Decimal("0.125")
-    assert stats.estimated_fee_fallback_total == Decimal("0")
-    assert stats.blended_fee_total == Decimal("0.125")
-    assert report.actual_fee == Decimal("0.125")
-    assert report.blended_fee == Decimal("0.125")
-    assert report.blended_net_pnl == Decimal("-50.125")
+    assert fee.actual_fee is None
+    assert fee.fee_source == "estimated_schedule"
+    assert stats.actual_enriched_trades == 0
+    assert stats.actual_fee_total == Decimal("0")
+    assert stats.estimated_fee_fallback_total == Decimal("0.3750")
+    assert stats.blended_fee_total == Decimal("0.3750")
+    assert report.actual_fee is None
+    assert report.blended_fee == Decimal("0.3750")
+    assert report.blended_net_pnl == Decimal("-50.3750")
 
 
 def test_enriched_trade_with_null_fee_falls_back_to_estimate(session):
@@ -243,7 +243,7 @@ def test_non_enriched_trade_uses_estimated_schedule_fallback(session):
     assert stats.blended_fee_total == Decimal("0.3750")
 
 
-def test_actual_fee_is_not_double_counted_with_estimate(session):
+def test_unverified_enrichment_fee_is_not_double_counted_with_estimate(session):
     upsert_market_payloads(session, ([_market(COND_SPORTS, category="Sports")],), [COND_SPORTS])
     actual_id = _event(session, tx="0xactualonly", ts=SPORTS_FEE_START_TS, condition_id=COND_SPORTS)
     _event(session, tx="0xfallbackonly", ts=SPORTS_FEE_START_TS + 1, condition_id=COND_SPORTS)
@@ -254,13 +254,13 @@ def test_actual_fee_is_not_double_counted_with_estimate(session):
     row = fee_attribution_report(session, wallet=WALLET)[0]
 
     assert stats.estimated_fee_total == Decimal("0.7500")
-    assert stats.actual_fee_total == Decimal("0.1000")
-    assert stats.estimated_fee_fallback_total == Decimal("0.3750")
-    assert stats.blended_fee_total == Decimal("0.4750")
-    assert coverage.blended_fee_total == Decimal("0.475")
-    assert row.actual_fee == Decimal("0.1000")
-    assert row.estimated_fee_fallback == Decimal("0.3750")
-    assert row.blended_fee == Decimal("0.4750")
+    assert stats.actual_fee_total == Decimal("0")
+    assert stats.estimated_fee_fallback_total == Decimal("0.7500")
+    assert stats.blended_fee_total == Decimal("0.7500")
+    assert coverage.blended_fee_total == Decimal("0.75")
+    assert row.actual_fee is None
+    assert row.estimated_fee_fallback == Decimal("0.7500")
+    assert row.blended_fee == Decimal("0.7500")
 
 
 def test_maker_taker_fee_breakdown_groups_by_enrichment_role(session):
@@ -277,9 +277,9 @@ def test_maker_taker_fee_breakdown_groups_by_enrichment_role(session):
     assert row.taker_trades == 1
     assert row.maker_volume == Decimal("50")
     assert row.taker_volume == Decimal("50")
-    assert row.maker_fee == Decimal("0.01")
-    assert row.taker_fee == Decimal("0.02")
-    assert row.fee_source_counts == (("actual_rpc", 1), ("actual_subgraph", 1))
+    assert row.maker_fee == Decimal("0.3750")
+    assert row.taker_fee == Decimal("0.3750")
+    assert row.fee_source_counts == (("estimated_schedule", 2),)
 
 
 def test_fee_report_cli_outputs_blended_totals(settings, session, monkeypatch):
@@ -296,14 +296,14 @@ def test_fee_report_cli_outputs_blended_totals(settings, session, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert "total_trades=2" in result.output
-    assert "actual_enriched_trades=1" in result.output
-    assert "actual_fee_coverage_pct=50.00" in result.output
-    assert "actual_fee_total=0.1" in result.output
-    assert "estimated_fee_fallback_total=0.375" in result.output
-    assert "blended_fee_total=0.475" in result.output
-    assert "net_pnl_after_blended_fees=-100.4750" in result.output
+    assert "actual_enriched_trades=0" in result.output
+    assert "actual_fee_coverage_pct=0.00" in result.output
+    assert "actual_fee_total=0" in result.output
+    assert "estimated_fee_fallback_total=0.75" in result.output
+    assert "fee_scenario_total=0.75" in result.output
+    assert "estimated_net_pnl_scenario=-100.7500" in result.output
     assert "maker_trades=1" in result.output
-    assert "fee_sources=actual_subgraph:1,estimated_schedule:1" in result.output
+    assert "fee_sources=estimated_schedule:2" in result.output
 
 
 def test_fee_report_shows_gross_and_estimated_net_without_mutating_ledger(session):

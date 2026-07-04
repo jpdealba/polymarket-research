@@ -298,10 +298,11 @@ def ledger_stats(wallet: str | None, open_value: str) -> None:
     post_rows = _period_rows(detail_rows, SPORTS_FEE_CUTOFF_TS, None)
     post_totals = _ledger_totals(post_rows, open_value=Decimal("0"))
     click.echo("")
-    click.echo("Fee-adjusted scenario:")
+    click.echo("Estimated fee scenario:")
     click.echo(
-        "Scope: post 2026-03-30 trades only; observed fill_enrichment.fee when available "
-        "plus schedule fallback otherwise. wallet_events gross/base PnL above is unchanged."
+        "Scope: post 2026-03-30 trades only; schedule-based taker assumption. "
+        "OrderFilled fee fields are not yet trusted as user-paid actual fees. "
+        "wallet_events gross/base PnL above is unchanged."
     )
     if fee_scenario_unavailable:
         click.echo(f"unavailable={fee_scenario_unavailable}")
@@ -320,8 +321,8 @@ def ledger_stats(wallet: str | None, open_value: str) -> None:
         click.echo(f"worst_case_fee_after_2026_03_30    {_fmt_usdc(worst_case_fee)}")
         click.echo(f"actual_fee_after_2026_03_30        {_fmt_usdc(actual_fee)}")
         click.echo(f"estimated_fallback_after_2026_03_30 {_fmt_usdc(fallback_fee)}")
-        click.echo(f"blended_fee_after_2026_03_30       {_fmt_usdc(blended_fee)}")
+        click.echo(f"fee_scenario_after_2026_03_30      {_fmt_usdc(blended_fee)}")
         click.echo(
-            f"net_pnl_after_blended_fees          "
+            f"estimated_net_pnl_scenario         "
             f"{_fmt_usdc(post_totals['pnl'] - blended_fee)}"
         )

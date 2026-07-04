@@ -158,7 +158,7 @@ def pnl_show(wallet: str, by_category: bool) -> None:
     for row in rows:
         scope = row.scope.removeprefix("category:") if by_category else row.scope
         fee_key = scope.lower() if by_category else "all"
-        blended_fees = fee_by_scope.get(fee_key, row.fees)
+        estimated_fees = fee_by_scope.get(fee_key, row.fees)
         gross_base_total = (
             row.directional_pnl
             + row.bond_merge_pnl
@@ -172,6 +172,6 @@ def pnl_show(wallet: str, by_category: bool) -> None:
             f"redemption={decimal_string(row.redemption_pnl)} "
             f"projection_fees={decimal_string(row.fees)} "
             f"gross_base_total={decimal_string(gross_base_total)} "
-            f"blended_fees={decimal_string(blended_fees)} "
-            f"net_after_blended_fees={decimal_string(gross_base_total - blended_fees)}"
+            f"estimated_fees={decimal_string(estimated_fees)} "
+            f"estimated_net_pnl_scenario={decimal_string(gross_base_total - estimated_fees)}"
         )

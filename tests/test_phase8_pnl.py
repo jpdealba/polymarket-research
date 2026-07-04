@@ -272,7 +272,7 @@ def test_phase8_cli_smoke(session, settings, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "Sports:" in result.output
     assert "gross_base_total=6" in result.output
-    assert "net_after_blended_fees=6" in result.output
+    assert "estimated_net_pnl_scenario=6" in result.output
 
 
 def _holding_qty(session, wallet, token_id):

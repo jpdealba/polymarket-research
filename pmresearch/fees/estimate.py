@@ -55,15 +55,6 @@ def _decimal(value: object) -> Decimal:
         return Decimal(0)
 
 
-def _actual_fee(value: object) -> Decimal | None:
-    if value is None:
-        return None
-    try:
-        return Decimal(str(value))
-    except (InvalidOperation, ValueError):
-        return None
-
-
 def _fee_formula(shares: Decimal, price: Decimal, fee_rate: Decimal, exponent: int) -> Decimal:
     if shares <= 0 or price <= 0 or price >= 1 or fee_rate <= 0:
         return Decimal(0)
@@ -134,11 +125,9 @@ def _trade_count(session: Session, wallet: str | None) -> int:
 def _trade_rows(session: Session, wallet: str | None, *, after_id: int, limit: int):
     query = (
         "SELECT we.id AS event_id, we.wallet, we.condition_id, we.token_id, we.side, "
-        "we.ts, we.delta_shares, we.price, m.category AS market_category, "
-        "fen.fee AS observed_fee, fen.source AS observed_source "
+        "we.ts, we.delta_shares, we.price, m.category AS market_category "
         "FROM wallet_events we "
         "LEFT JOIN markets m ON m.condition_id = lower(we.condition_id) "
-        "LEFT JOIN fill_enrichment fen ON fen.event_id = we.id "
         "WHERE we.event_type = 'TRADE' AND we.id > :after_id "
     )
     params = {"after_id": after_id, "limit": limit}
@@ -216,16 +205,15 @@ def compute_fee_estimates(
                 fee_estimated += 1
             estimated_total += fee
             worst_case_total += fee
-            actual = _actual_fee(row.observed_fee)
-            if actual is not None:
-                actual_enriched += 1
-                actual_total += actual
-                blended_total += actual
-                fee_source = f"actual_{row.observed_source or 'unknown'}"
-            else:
-                fallback_total += fee
-                blended_total += fee
-                fee_source = "estimated_schedule"
+            # Do NOT treat fill_enrichment.fee as an actual user fee yet.
+            # Live RN1 validation showed subgraph fee values that can exceed
+            # the schedule worst-case by multiples, so the OrderFilled `fee`
+            # field remains untrusted for net-PnL until its semantics and
+            # maker/taker attribution are independently verified.
+            actual = None
+            fallback_total += fee
+            blended_total += fee
+            fee_source = "estimated_schedule"
             batch_params.append(
                 {
                     "event_id": int(row.event_id),
