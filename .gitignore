@@ -8,6 +8,7 @@ dist/
 venv/
 .pytest_cache/
 data/
+exports/
 *.db
 *.db-wal
 *.db-shm

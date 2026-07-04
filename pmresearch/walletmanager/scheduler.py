@@ -243,7 +243,13 @@ def run_worldcup_enrichment_cycle(settings: Settings) -> None:
     PolygonScan block-log scanning, on a short cadence so fills show up
     during live matches. Only runs when no subgraph is configured — the
     daily, all-wallets `run_enrichment_cycle` already covers that case."""
-    if settings.subgraph_url or not settings.polygonscan_api_key:
+    if settings.subgraph_url:
+        return
+    if not settings.polygonscan_api_key:
+        logger.warning(
+            "World Cup enrichment skipped: PMR_POLYGONSCAN_API_KEY is not set "
+            "for this process."
+        )
         return
 
     from ..ingest.enrichment import _current_subgraph_ts, run_enrichment
@@ -255,6 +261,7 @@ def run_worldcup_enrichment_cycle(settings: Settings) -> None:
     try:
         wallets = worldcup_tracked_wallets(session, settings)
         if not wallets:
+            logger.warning("World Cup enrichment skipped: no tracked wallets selected.")
             return
         head_block = block_source.get_block_number()
         for address in wallets:
@@ -346,6 +353,7 @@ def run_worldcup_sync_cycle(settings: Settings) -> None:
             return
         from ..ingest.runner import run_ingest
         from ..projections.holdings import rebuild_holdings
+        from ..watchlists.world_cup import build_world_cup_watchlist
 
         for wallet in wallets:
             outcome = sync_runner.run_incremental(
@@ -357,12 +365,24 @@ def run_worldcup_sync_cycle(settings: Settings) -> None:
                 wallet,
                 dust_epsilon=settings.dust_epsilon,
             )
+            # Add newly-traded tokens to the watchlist on the same 60s cadence
+            # as sync, instead of waiting up to 300s for the separate rebuild
+            # job — otherwise a token RN1 just started trading gets no book
+            # snapshots (and shows up as "missing" context) until the slower
+            # job catches up.
+            watchlist = build_world_cup_watchlist(
+                session,
+                wallet,
+                name=settings.worldcup_watchlist_name,
+                dust_epsilon=str(settings.dust_epsilon),
+            )
             logger.info(
-                "World Cup sync %s: rows=%d ingest_inserted=%d holdings=%d",
+                "World Cup sync %s: rows=%d ingest_inserted=%d holdings=%d watchlist_active=%d",
                 wallet,
                 outcome.rows_fetched,
                 ingest.events_inserted,
                 holdings.tokens_written,
+                watchlist.active_tokens,
             )
     except Exception:
         logger.exception("World Cup sync cycle failed")

@@ -110,8 +110,17 @@ class PolygonscanSource:
         raise RpcError(f"PolygonScan rate limit did not clear: {payload!r}")
 
     def get_block_number(self) -> int:
-        payload = self._get({"module": "proxy", "action": "eth_blockNumber"})
-        return int(payload["result"], 16)
+        """Etherscan's multichain proxy load-balances across nodes that can
+        disagree by thousands of blocks on a single read. Take two reads and
+        return the smaller: the true head can only move forward by a handful
+        of blocks between them, so a much larger gap means one read hit a
+        stale/inconsistent node — using the lower value avoids advancing an
+        enrichment watermark past a block that isn't really the chain head
+        yet (which would strand it, since real reads for the true, lower
+        head afterward would never look forward enough to catch up)."""
+        first = int(self._get({"module": "proxy", "action": "eth_blockNumber"})["result"], 16)
+        second = int(self._get({"module": "proxy", "action": "eth_blockNumber"})["result"], 16)
+        return min(first, second)
 
     def find_block_by_timestamp(self, ts: int, **_: object) -> int:
         payload = self._get(
