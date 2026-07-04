@@ -1,0 +1,10 @@
+wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea scope=all
+detector=inventory_cycling v1 computed_at=2026-07-04T12:49:51.199819+00:00
+label=inventory_cycling  score=0.656  confidence=1.000
+evidence (feature: value | weight | sub_score):
+  bond_inventory_ratio             value=0.1449123495349651986447653696 weight=0.40 sub_score=0.145
+  merge_frequency                  value=155.3518005540166204986149584 weight=0.35 sub_score=0.997
+  redeem_frequency                 value=276.1357340720221606648199446 weight=0.25 sub_score=0.998
+score_formula: weighted mean of per-feature sub-scores over available features; NULL features excluded from numerator and denominator
+blind spots:
+  Cadence is measured per active day, so a bursty cycler (many merges in a few days) and a steady one look alike. Merge/redeem counts ignore size - a wallet cycling large notional and a small one score the same. Redemption attribution depends on resolution data being present; unresolved holdings are not yet counted as cycled.

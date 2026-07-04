@@ -1,0 +1,11 @@
+wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea scope=all
+detector=market_making v1 computed_at=2026-07-04T12:49:51.199819+00:00
+label=market_making  score=0.367  confidence=1.000
+evidence (feature: value | weight | sub_score):
+  bond_inventory_ratio             value=0.1449123495349651986447653696 weight=0.20 sub_score=0.145
+  maker_fill_share                 value=0.9362167968611057397865970974 weight=0.35 sub_score=0.936
+  micro_episode_share              value=0.001733036958896884300945635384 weight=0.20 sub_score=0.002
+  reward_income_share              value=0.03826218461082964231670844545 weight=0.25 sub_score=0.038
+score_formula: weighted mean of per-feature sub-scores over available features; NULL features excluded from numerator and denominator
+blind spots:
+  Quote placement is unobservable - no historical order-book/quote data was collected, so passive liquidity provision cannot be distinguished from active market making, and true two-sided quoting is only proxied by bond (paired) inventory. maker_fill_share is conditioned on enrichment coverage: fills outside the subgraph-covered window carry no maker/taker role and are invisible to this score.

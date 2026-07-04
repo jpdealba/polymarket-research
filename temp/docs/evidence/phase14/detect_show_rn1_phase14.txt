@@ -1,0 +1,5 @@
+wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea scope=all computed_at=2026-07-04T12:49:51.199819+00:00
+detector               ver    score     conf  missing
+inventory_cycling        1    0.656    1.000  -
+market_making            1    0.367    1.000  -
+value_betting            1    0.401    1.000  -

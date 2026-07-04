@@ -1,0 +1,11 @@
+wallet=0x2005d16a84ceefa912d4e380cd32e7ff827875ea scope=all
+detector=value_betting v1 computed_at=2026-07-04T12:49:51.199819+00:00
+label=value_betting  score=0.401  confidence=1.000
+evidence (feature: value | weight | sub_score):
+  calibration_edge                 value=0.02456803980993003329965952032 weight=0.25 sub_score=0.525
+  episode_duration_p50             value=22201.5 weight=0.25 sub_score=0.204
+  market_category_concentration    value=0.9964552888026521261689295048 weight=0.20 sub_score=0.996
+  taker_fill_share                 value=0.06378320313889426021340290258 weight=0.30 sub_score=0.064
+score_formula: weighted mean of per-feature sub-scores over available features; NULL features excluded from numerator and denominator
+blind spots:
+  Calibration edge is only as trustworthy as its resolved-episode sample - few resolutions make the edge noisy, and it is survivorship-scoped to markets that actually resolved. ~1-minute price fidelity limits any read of entry timing or momentum. taker_fill_share is conditioned on enrichment coverage; market_category_concentration is only defined at the all scope and is NULL (drops out) inside a single-category scope.
