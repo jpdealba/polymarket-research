@@ -13,3 +13,5 @@ exports/
 *.db-wal
 *.db-shm
 .env
+collector.log
+collector.err.log

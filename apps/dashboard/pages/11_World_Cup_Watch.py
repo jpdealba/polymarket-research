@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import time
 
@@ -11,6 +13,18 @@ from plotly import graph_objects as go
 from pmresearch import api
 
 from _common import CHART_CONFIG, _merge_layout, format_pct, format_ts, get_settings
+
+
+def _to_csv(rows: list[dict]) -> bytes:
+    """Serialize a list of uniform dict rows to CSV bytes for download."""
+    if not rows:
+        return b""
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=list(rows[0].keys()))
+    writer.writeheader()
+    writer.writerows(rows)
+    return buffer.getvalue().encode("utf-8")
+
 
 st.title("World Cup Microstructure Watch")
 
@@ -159,6 +173,13 @@ for row in tokens:
         }
     )
 st.dataframe(watch_rows, use_container_width=True)
+st.download_button(
+    "Export watchlist (CSV)",
+    data=_to_csv(watch_rows),
+    file_name=f"worldcup_watchlist_{int(time.time())}.csv",
+    mime="text/csv",
+    disabled=not watch_rows,
+)
 
 st.header("Live Books")
 token_options = [row.token_id for row in tokens]
@@ -247,7 +268,25 @@ for col, w in zip(wallet_columns, wallet_view_options):
         elif w_coverage.strict_share < 0.5:
             st.warning("Strict maker-context coverage is low; avoid strategy conclusions from this sample.")
 
+        maker_export = _fill_rows(maker_fills, w)
+        taker_export = _fill_rows(taker_fills, w)
         st.markdown("**Maker Fills**")
-        st.dataframe(_fill_rows(maker_fills, w), use_container_width=True)
+        st.dataframe(maker_export, use_container_width=True)
+        st.download_button(
+            "Export maker fills (CSV)",
+            data=_to_csv(maker_export),
+            file_name=f"worldcup_maker_fills_{w[:10]}_{int(time.time())}.csv",
+            mime="text/csv",
+            disabled=not maker_export,
+            key=f"dl_maker_{w}",
+        )
         st.markdown("**Taker Fills**")
-        st.dataframe(_fill_rows(taker_fills, w), use_container_width=True)
+        st.dataframe(taker_export, use_container_width=True)
+        st.download_button(
+            "Export taker fills (CSV)",
+            data=_to_csv(taker_export),
+            file_name=f"worldcup_taker_fills_{w[:10]}_{int(time.time())}.csv",
+            mime="text/csv",
+            disabled=not taker_export,
+            key=f"dl_taker_{w}",
+        )

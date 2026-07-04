@@ -252,15 +252,10 @@ def build_world_cup_watchlist(
 
     candidates: dict[str, dict] = {}
     for row in _market_token_rows(session):
-        if not _is_world_cup_text(
-            row.question,
-            row.market_slug,
-            row.market_category,
-            row.event_title,
-            row.event_slug,
-        ):
-            continue
-
+        # Wallet-local facts (recent trade / open holding) are tracked regardless
+        # of the World Cup keyword filter: once RN1 leaves the World Cup for MLB,
+        # tennis, etc., we still follow its live positions. The keyword filter only
+        # gates the *speculative* branches below (markets RN1 hasn't touched yet).
         if row.token_id in recent:
             token = _row_payload(
                 row,
@@ -275,6 +270,14 @@ def build_world_cup_watchlist(
                 priority=20,
                 reason="rn1 has nonzero local holding",
             )
+        elif not _is_world_cup_text(
+            row.question,
+            row.market_slug,
+            row.market_category,
+            row.event_title,
+            row.event_slug,
+        ):
+            continue
         elif _is_derivative(row.question, row.market_slug):
             token = _row_payload(
                 row,
@@ -298,6 +301,23 @@ def build_world_cup_watchlist(
     for token in candidates.values():
         if _upsert_watchlist_token(session, watchlist_id=watchlist_id, token=token, now=now):
             upserted += 1
+
+    # Retire tokens whose market has since resolved. _market_token_rows only
+    # yields open markets, so a resolved token simply drops out of `candidates`
+    # and would otherwise stay is_active=1 forever, making the book sampler
+    # hammer the CLOB with 404s for a closed market on every fast cycle.
+    session.execute(
+        text(
+            "UPDATE watchlist_tokens SET is_active = 0, last_seen_ts = :now "
+            "WHERE watchlist_id = :watchlist_id AND is_active = 1 "
+            "AND token_id IN ("
+            "  SELECT t.token_id FROM tokens t "
+            "  JOIN markets m ON m.condition_id = t.condition_id "
+            "  WHERE m.closed = 1"
+            ")"
+        ),
+        {"watchlist_id": watchlist_id, "now": now},
+    )
     session.commit()
     active = session.execute(
         text(

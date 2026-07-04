@@ -121,6 +121,44 @@ def test_recent_trade_priority_beats_keyword_only(session):
     assert rows["tok_keyword"].priority == 30
 
 
+def test_recent_trade_in_non_worldcup_market_is_tracked(session):
+    # RN1 leaves the World Cup and trades MLB/tennis: we still follow the live
+    # position even though the market text has no World Cup keyword.
+    now = int(time.time())
+    _seed_market(
+        session,
+        condition_id="cond_mlb",
+        token_id="tok_mlb",
+        question="Minnesota Twins vs. New York Yankees",
+    )
+    _seed_trade(session, token_id="tok_mlb", condition_id="cond_mlb", ts=now - 60)
+
+    from pmresearch.watchlists.world_cup import build_world_cup_watchlist, list_watchlist_tokens
+
+    build_world_cup_watchlist(session, "0xabc")
+    rows = {r.token_id: r for r in list_watchlist_tokens(session, name="world_cup_2026", active_only=True)}
+
+    assert "tok_mlb" in rows
+    assert rows["tok_mlb"].priority == 10
+    assert rows["tok_mlb"].source == "rn1_recent_trade"
+
+
+def test_resolved_market_token_is_deactivated(session):
+    # A World Cup token that was active becomes inactive once its market
+    # resolves, so the book sampler stops hitting the CLOB with 404s.
+    _seed_market(session, token_id="tok_wc")
+    from pmresearch.watchlists.world_cup import build_world_cup_watchlist, list_watchlist_tokens
+
+    build_world_cup_watchlist(session, "0xabc")
+    assert [r.token_id for r in list_watchlist_tokens(session, name="world_cup_2026", active_only=True)] == ["tok_wc"]
+
+    session.execute(text("UPDATE markets SET closed = 1 WHERE condition_id = 'cond_wc'"))
+    session.commit()
+
+    build_world_cup_watchlist(session, "0xabc")
+    assert list_watchlist_tokens(session, name="world_cup_2026", active_only=True) == []
+
+
 def test_open_holding_priority(session):
     _seed_market(session, token_id="tok_wc")
     _seed_holding(session, token_id="tok_wc")
