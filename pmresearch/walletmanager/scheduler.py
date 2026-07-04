@@ -19,6 +19,7 @@ from ..sources.dataapi import DataApiSource
 from ..sources.gamma import GammaSource
 from ..ingest.markets import (
     MarketSyncStats,
+    incremental_market_condition_ids,
     ledger_condition_ids,
     upsert_market_payloads,
 )
@@ -145,12 +146,16 @@ def run_markets_refresh_cycle(settings: Settings, *, missing_only: bool = False)
     source = GammaSource()
     raw_store = RawStore(settings, session)
     try:
-        condition_ids = ledger_condition_ids(session, missing_only=missing_only)
+        condition_ids = (
+            ledger_condition_ids(session, missing_only=True)
+            if missing_only
+            else incremental_market_condition_ids(session)
+        )
         if not condition_ids:
             return
         stats = _fetch_and_upsert_markets(session, source, raw_store, condition_ids)
         logger.info(
-            "Markets refresh: requested=%d markets=%d tokens=%d events=%d missing=%d",
+            "Markets incremental refresh: requested=%d markets=%d tokens=%d events=%d missing=%d",
             stats.requested_conditions,
             stats.markets_upserted,
             stats.tokens_upserted,

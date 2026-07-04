@@ -40,7 +40,7 @@ The `pmr` CLI (entry point `pmresearch.cli:main`) is the primary way to exercise
 pmr wallet add 0x... --name "..."
 pmr sync backfill 0x...          # Data API -> Raw Store
 pmr ingest run --wallet 0x...    # Raw Store -> wallet_events ledger
-pmr markets sync --all           # Gamma metadata -> markets/tokens/events
+pmr markets sync                 # Gamma metadata -> markets/tokens/events (incremental)
 pmr fees report --wallet 0x... --by-category --pre-post-sports-fee
 ```
 

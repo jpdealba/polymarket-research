@@ -80,7 +80,7 @@ Todos los comandos aceptan `--help` para ver la ayuda integrada.
 
 | Comando | Parametros | Que hace |
 | --- | --- | --- |
-| `pmr markets sync` | `--all` (flag); `--condition TEXT` (multiple, repetible) | Descarga metadata desde Gamma. `--all` = todos los condition_id del ledger. `--condition` = uno o mas especificos. No combinables. |
+| `pmr markets sync` | `--all` (flag); `--condition TEXT` (multiple, repetible) | Descarga metadata desde Gamma. Sin flags = incremental: metadata/token rows faltantes + mercados que siguen abiertos. `--all` = refresh completo de todos los condition_id del ledger (lento). `--condition` = uno o mas especificos. No combinables. |
 | `pmr markets stats` | ninguno | Muestra conteos: total, resueltos, descriptores sin clasificar, condiciones sin metadata. |
 
 ### fees
@@ -202,7 +202,7 @@ pmr db upgrade
 pmr wallet add 0x... --name "Wallet ejemplo"
 pmr sync backfill 0x...
 pmr ingest run --wallet 0x...
-pmr markets sync --all
+pmr markets sync
 
 # Fees
 pmr fees compute --wallet 0x...

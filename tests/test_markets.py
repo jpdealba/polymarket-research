@@ -8,6 +8,7 @@ from pmresearch.ingest.markets import (
     MarketSyncStats,
     derive_category,
     event_ids_for_conditions,
+    incremental_market_condition_ids,
     ledger_condition_ids,
     missing_market_count,
     upsert_event_category,
@@ -21,6 +22,8 @@ from pmresearch.sources.gamma import GammaSource
 COND_BINARY = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 COND_NEGRISK = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 COND_TEAM = "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+COND_CLOSED_NO_PRICE = "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+COND_CLOSED_NO_TOKEN = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
 
 def _market(
@@ -56,6 +59,36 @@ def _market(
         "closed": closed,
         "closedTime": "2026-01-02 01:00:00+00" if closed else None,
     }
+
+
+def _seed_raw_fetch(session) -> int:
+    session.execute(
+        text(
+            "INSERT INTO raw_fetches "
+            "(source, endpoint, params_json, fetched_at, http_status, file_path, content_hash, row_count, ingested_at) "
+            "VALUES ('dataapi', 'activity', '{}', 'now', 200, 'fixture', 'hash', 1, 'now')"
+        )
+    )
+    return int(session.execute(text("SELECT max(id) FROM raw_fetches")).scalar())
+
+
+def _seed_wallet_event(session, condition_id: str, *, raw_id: int | None = None) -> None:
+    raw_id = raw_id if raw_id is not None else _seed_raw_fetch(session)
+    session.execute(
+        text(
+            "INSERT INTO wallet_events "
+            "(wallet, event_type, ts, tx_hash, condition_id, token_id, side, delta_shares, "
+            "delta_usdc, price, usdc_size, source, is_derived, raw_ref, dedupe_key, ingested_at) "
+            "VALUES ('0xwallet', 'TRADE', 1, :tx_hash, :condition_id, '101', 'BUY', "
+            "'1', '-0.5', '0.5', '0.5', 'dataapi', 0, :raw_id, :dedupe, 'now')"
+        ),
+        {
+            "condition_id": condition_id,
+            "raw_id": raw_id,
+            "tx_hash": f"0x{condition_id[-8:]}",
+            "dedupe": f"dedupe-{condition_id[-8:]}",
+        },
+    )
 
 
 def test_descriptor_is_label_agnostic_for_binary_team_name_market():
@@ -116,24 +149,7 @@ def test_upsert_market_fixtures_resolution_and_idempotency(session):
 
 
 def test_missing_market_detection_query(session):
-    session.execute(
-        text(
-            "INSERT INTO raw_fetches "
-            "(source, endpoint, params_json, fetched_at, http_status, file_path, content_hash, row_count, ingested_at) "
-            "VALUES ('dataapi', 'activity', '{}', 'now', 200, 'fixture', 'hash', 1, 'now')"
-        )
-    )
-    raw_id = session.execute(text("SELECT id FROM raw_fetches")).scalar()
-    session.execute(
-        text(
-            "INSERT INTO wallet_events "
-            "(wallet, event_type, ts, tx_hash, condition_id, token_id, side, delta_shares, "
-            "delta_usdc, price, usdc_size, source, is_derived, raw_ref, dedupe_key, ingested_at) "
-            "VALUES ('0xwallet', 'TRADE', 1, '0xtx', :condition_id, '101', 'BUY', "
-            "'1', '-0.5', '0.5', '0.5', 'dataapi', 0, :raw_id, 'dedupe', 'now')"
-        ),
-        {"condition_id": COND_BINARY, "raw_id": raw_id},
-    )
+    _seed_wallet_event(session, COND_BINARY)
     session.commit()
 
     assert ledger_condition_ids(session, missing_only=True) == [COND_BINARY]
@@ -146,6 +162,60 @@ def test_missing_market_detection_query(session):
     )
     assert ledger_condition_ids(session, missing_only=True) == []
     assert missing_market_count(session) == 0
+
+
+def test_incremental_market_conditions_include_actionable_markets_only(session):
+    raw_id = _seed_raw_fetch(session)
+    _seed_wallet_event(session, COND_BINARY.upper(), raw_id=raw_id)
+    _seed_wallet_event(session, COND_NEGRISK, raw_id=raw_id)
+    _seed_wallet_event(session, COND_TEAM, raw_id=raw_id)
+    _seed_wallet_event(session, COND_CLOSED_NO_PRICE, raw_id=raw_id)
+    _seed_wallet_event(session, COND_CLOSED_NO_TOKEN, raw_id=raw_id)
+
+    upsert_market_payloads(
+        session,
+        (
+            [
+                _market(COND_NEGRISK, outcomes=("Yes", "No"), token_ids=("201", "202")),
+                _market(
+                    COND_TEAM,
+                    outcomes=("Mavericks", "Grizzlies"),
+                    token_ids=("301", "302"),
+                    prices=("0", "1"),
+                    closed=True,
+                    event_id="300",
+                ),
+                _market(
+                    COND_CLOSED_NO_PRICE,
+                    outcomes=("Yes", "No"),
+                    token_ids=("401", "402"),
+                    prices=("0",),
+                    closed=True,
+                    event_id="400",
+                ),
+                _market(
+                    COND_CLOSED_NO_TOKEN,
+                    outcomes=("Yes", "No"),
+                    token_ids=("501", "502"),
+                    prices=("0", "1"),
+                    closed=True,
+                    event_id="500",
+                ),
+            ],
+        ),
+        [COND_NEGRISK, COND_TEAM, COND_CLOSED_NO_PRICE, COND_CLOSED_NO_TOKEN],
+    )
+    session.execute(
+        text("DELETE FROM tokens WHERE condition_id = :condition_id"),
+        {"condition_id": COND_CLOSED_NO_TOKEN},
+    )
+
+    assert incremental_market_condition_ids(session) == [
+        COND_BINARY,
+        COND_NEGRISK,
+        COND_CLOSED_NO_PRICE,
+        COND_CLOSED_NO_TOKEN,
+    ]
 
 
 def test_gamma_source_batches_and_raw_stores(settings, session):

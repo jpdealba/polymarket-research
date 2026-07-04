@@ -273,6 +273,36 @@ def ledger_condition_ids(session: Session, *, missing_only: bool = False) -> lis
     return [row.condition_id for row in session.execute(text(query)).fetchall()]
 
 
+def incremental_market_condition_ids(session: Session) -> list[str]:
+    """Conditions whose Gamma metadata can affect current projections.
+
+    This is the fast path for routine syncs after new wallet activity lands:
+    fetch markets/tokens that are missing locally, plus markets we still
+    believe are open. Closed markets with missing resolution prices are
+    included because that metadata affects valuation/settlement projections.
+    Other closed markets should not be re-fetched unless the caller explicitly
+    asks for a full refresh.
+    """
+    rows = session.execute(
+        text(
+            "SELECT DISTINCT lower(we.condition_id) AS condition_id "
+            "FROM wallet_events we "
+            "LEFT JOIN markets m ON m.condition_id = lower(we.condition_id) "
+            "WHERE we.condition_id IS NOT NULL AND we.condition_id != '' "
+            "AND ("
+            "m.condition_id IS NULL "
+            "OR NOT EXISTS ("
+            "SELECT 1 FROM tokens t WHERE t.condition_id = lower(we.condition_id)"
+            ") "
+            "OR COALESCE(m.closed, 0) = 0 "
+            "OR (m.closed = 1 AND m.resolution_prices_json IS NULL)"
+            ") "
+            "ORDER BY condition_id"
+        )
+    ).fetchall()
+    return [row.condition_id for row in rows]
+
+
 def event_ids_for_conditions(session: Session, condition_ids: list[str]) -> list[str]:
     normalized = sorted({condition_id.lower() for condition_id in condition_ids if condition_id})
     if not normalized:

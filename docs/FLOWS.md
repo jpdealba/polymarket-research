@@ -68,7 +68,7 @@ pmr sync status
 
 ```bash
 # Sincronizar metadata de todos los mercados presentes en el ledger
-pmr markets sync --all
+pmr markets sync
 
 # Verificar stats
 pmr markets stats
@@ -311,7 +311,7 @@ pmr wallet add 0x... --name "Mi wallet"
 # Sincronización
 pmr sync backfill 0x...
 pmr ingest run --wallet 0x...
-pmr markets sync --all
+pmr markets sync
 
 # Fees
 pmr fees compute --wallet 0x...
@@ -353,7 +353,7 @@ pmr trust status
 # Después de que el scheduler corre (o manualmente)
 pmr sync incremental
 pmr ingest run
-pmr markets sync --all
+pmr markets sync
 pmr fees compute
 pmr derive run
 pmr replay holdings
@@ -364,4 +364,3 @@ pmr enrich run
 pmr fingerprints compute
 pmr detect run
 ```
-

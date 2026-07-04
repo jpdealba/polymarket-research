@@ -10,6 +10,7 @@ from ..db.engine import get_session_factory
 from ..ingest.markets import (
     MarketSyncStats,
     event_ids_for_conditions,
+    incremental_market_condition_ids,
     ledger_condition_ids,
     missing_market_count,
     upsert_event_category,
@@ -117,7 +118,12 @@ def markets_group() -> None:
 
 
 @markets_group.command("sync")
-@click.option("--all", "sync_all", is_flag=True, help="Sync every condition_id in the ledger.")
+@click.option(
+    "--all",
+    "sync_all",
+    is_flag=True,
+    help="Full refresh: sync every condition_id in the ledger (slow).",
+)
 @click.option("--condition", "conditions", multiple=True, help="Specific condition_id to sync.")
 def markets_sync(sync_all: bool, conditions: tuple[str, ...]) -> None:
     if sync_all and conditions:
@@ -131,9 +137,11 @@ def markets_sync(sync_all: bool, conditions: tuple[str, ...]) -> None:
     try:
         condition_ids = list(conditions)
         if not condition_ids:
-            condition_ids = ledger_condition_ids(session, missing_only=not sync_all)
-            if not condition_ids and not sync_all:
-                condition_ids = ledger_condition_ids(session, missing_only=False)
+            condition_ids = (
+                ledger_condition_ids(session, missing_only=False)
+                if sync_all
+                else incremental_market_condition_ids(session)
+            )
         raw_store = RawStore(settings, session)
         stats = _sync_condition_ids(session, source, raw_store, condition_ids)
     finally:
