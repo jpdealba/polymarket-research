@@ -111,7 +111,7 @@ def _post_cutoff_fee_scenario(session, wallet: str | None) -> dict[str, Decimal 
 
     compute_fee_estimates(session, wallet=wallet, on_progress=progress)
     query = (
-        "SELECT fe.estimated_fee, fe.worst_case_fee "
+        "SELECT fe.estimated_fee, fe.worst_case_fee, fe.actual_fee "
         "FROM fee_estimates fe "
         "JOIN wallet_events we ON we.id = fe.event_id "
         "WHERE we.event_type = 'TRADE' AND we.ts >= :cutoff"
@@ -121,10 +121,20 @@ def _post_cutoff_fee_scenario(session, wallet: str | None) -> dict[str, Decimal 
         query += " AND lower(we.wallet) = lower(:wallet)"
         params["wallet"] = wallet
     rows = session.execute(text(query), params).fetchall()
+    actual_rows = [row for row in rows if row.actual_fee is not None]
+    estimated_fallback = sum(
+        (_decimal(row.estimated_fee) for row in rows if row.actual_fee is None),
+        Decimal("0"),
+    )
+    actual_fee = sum((_decimal(row.actual_fee) for row in actual_rows), Decimal("0"))
     return {
         "trades": len(rows),
+        "actual_enriched_trades": len(actual_rows),
         "estimated_fee": sum((_decimal(row.estimated_fee) for row in rows), Decimal("0")),
         "worst_case_fee": sum((_decimal(row.worst_case_fee) for row in rows), Decimal("0")),
+        "actual_fee": actual_fee,
+        "estimated_fee_fallback": estimated_fallback,
+        "blended_fee": actual_fee + estimated_fallback,
     }
 
 
@@ -288,22 +298,30 @@ def ledger_stats(wallet: str | None, open_value: str) -> None:
     post_rows = _period_rows(detail_rows, SPORTS_FEE_CUTOFF_TS, None)
     post_totals = _ledger_totals(post_rows, open_value=Decimal("0"))
     click.echo("")
-    click.echo("Estimated fee scenario:")
+    click.echo("Fee-adjusted scenario:")
     click.echo(
-        "Scope: post 2026-03-30 trades only; schedule-based taker assumption, "
-        "not actual net PnL. wallet_events gross/base PnL above is unchanged."
+        "Scope: post 2026-03-30 trades only; observed fill_enrichment.fee when available "
+        "plus schedule fallback otherwise. wallet_events gross/base PnL above is unchanged."
     )
     if fee_scenario_unavailable:
         click.echo(f"unavailable={fee_scenario_unavailable}")
     else:
         estimated_fee = fee_scenario["estimated_fee"] if fee_scenario else Decimal("0")
         worst_case_fee = fee_scenario["worst_case_fee"] if fee_scenario else Decimal("0")
+        actual_fee = fee_scenario["actual_fee"] if fee_scenario else Decimal("0")
+        fallback_fee = fee_scenario["estimated_fee_fallback"] if fee_scenario else Decimal("0")
+        blended_fee = fee_scenario["blended_fee"] if fee_scenario else Decimal("0")
         trades = fee_scenario["trades"] if fee_scenario else 0
+        actual_trades = fee_scenario["actual_enriched_trades"] if fee_scenario else 0
         click.echo(f"post_2026_03_30_trades_with_fee_rows {trades}")
+        click.echo(f"post_2026_03_30_actual_fee_trades     {actual_trades}")
         click.echo(f"post_2026_03_30_gross_base_pnl     {_fmt_usdc(post_totals['pnl'])}")
         click.echo(f"estimated_fee_after_2026_03_30     {_fmt_usdc(estimated_fee)}")
         click.echo(f"worst_case_fee_after_2026_03_30    {_fmt_usdc(worst_case_fee)}")
+        click.echo(f"actual_fee_after_2026_03_30        {_fmt_usdc(actual_fee)}")
+        click.echo(f"estimated_fallback_after_2026_03_30 {_fmt_usdc(fallback_fee)}")
+        click.echo(f"blended_fee_after_2026_03_30       {_fmt_usdc(blended_fee)}")
         click.echo(
-            f"estimated_net_pnl_after_fee         "
-            f"{_fmt_usdc(post_totals['pnl'] - estimated_fee)}"
+            f"net_pnl_after_blended_fees          "
+            f"{_fmt_usdc(post_totals['pnl'] - blended_fee)}"
         )

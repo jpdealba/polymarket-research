@@ -6,6 +6,7 @@ import click
 
 from ..config import ensure_data_dirs, get_settings
 from ..db.engine import get_session_factory
+from ..fees.estimate import compute_fee_estimates
 from ..ingest.derived import (
     DeriveProgress,
     derive_redeem_payouts,
@@ -19,6 +20,7 @@ from ..projections.pnl_decomposition import (
     rebuild_pnl_decomposition,
 )
 from ..reconcile.checks import decimal_string
+from ..reports.fee_attribution import fee_attribution_report
 
 
 @click.group("derive")
@@ -141,18 +143,35 @@ def pnl_show(wallet: str, by_category: bool) -> None:
     ensure_data_dirs(settings)
     session = get_session_factory(settings)()
     try:
+        compute_fee_estimates(session, wallet=wallet)
+        fee_rows = fee_attribution_report(session, wallet=wallet, by_category=by_category)
         rows = fetch_pnl_decomposition(session, wallet, by_category=by_category)
     finally:
         session.close()
     if not rows:
         click.echo("No PnL decomposition rows. Run `pmr derive run --wallet <addr>` first.")
         return
+    fee_by_scope = {
+        (row.category.lower() if by_category else "all"): row.blended_fee
+        for row in fee_rows
+    }
     for row in rows:
         scope = row.scope.removeprefix("category:") if by_category else row.scope
+        fee_key = scope.lower() if by_category else "all"
+        blended_fees = fee_by_scope.get(fee_key, row.fees)
+        gross_base_total = (
+            row.directional_pnl
+            + row.bond_merge_pnl
+            + row.reward_income
+            + row.redemption_pnl
+        )
         click.echo(
             f"{scope}: directional={decimal_string(row.directional_pnl)} "
             f"bond_merge={decimal_string(row.bond_merge_pnl)} "
             f"rewards={decimal_string(row.reward_income)} "
             f"redemption={decimal_string(row.redemption_pnl)} "
-            f"fees={decimal_string(row.fees)} total={decimal_string(row.total_pnl)}"
+            f"projection_fees={decimal_string(row.fees)} "
+            f"gross_base_total={decimal_string(gross_base_total)} "
+            f"blended_fees={decimal_string(blended_fees)} "
+            f"net_after_blended_fees={decimal_string(gross_base_total - blended_fees)}"
         )

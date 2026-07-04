@@ -134,10 +134,13 @@ def test_ledger_stats_output_labels_gross_base_not_fee_adjusted(settings, sessio
     assert "Gross/base PnL" in result.output
     assert "Sports fee date periods (gross/base only; fees not applied):" in result.output
     assert "Gross/base ROI on BUY volume" in result.output
-    assert "Estimated fee scenario:" in result.output
-    assert "not actual net PnL" in result.output
+    assert "Fee-adjusted scenario:" in result.output
+    assert "observed fill_enrichment.fee when available plus schedule fallback otherwise" in result.output
     assert "post_2026_03_30_gross_base_pnl     -54.000000" in result.output
     assert "estimated_fee_after_2026_03_30     0.402400" in result.output
-    assert "estimated_net_pnl_after_fee         -54.402400" in result.output
+    assert "actual_fee_after_2026_03_30        0.000000" in result.output
+    assert "estimated_fallback_after_2026_03_30 0.402400" in result.output
+    assert "blended_fee_after_2026_03_30       0.402400" in result.output
+    assert "net_pnl_after_blended_fees          -54.402400" in result.output
     assert "Fee-regime periods:" not in result.output
     assert "\nPnL                   " not in result.output

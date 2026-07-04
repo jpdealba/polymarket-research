@@ -27,6 +27,7 @@ class FeeEstimate:
     estimated_fee: Decimal
     worst_case_fee: Decimal
     actual_fee: Decimal | None
+    fee_source: str
     fee_currency: str
     rule_name: str
     confidence: str
@@ -42,6 +43,9 @@ class FeeEstimateStats:
     estimates_upserted: int
     estimated_fee_total: Decimal
     worst_case_fee_total: Decimal
+    actual_fee_total: Decimal
+    estimated_fee_fallback_total: Decimal
+    blended_fee_total: Decimal
 
 
 def _decimal(value: object) -> Decimal:
@@ -49,6 +53,15 @@ def _decimal(value: object) -> Decimal:
         return Decimal(str(value))
     except (InvalidOperation, ValueError):
         return Decimal(0)
+
+
+def _actual_fee(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
 
 
 def _fee_formula(shares: Decimal, price: Decimal, fee_rate: Decimal, exponent: int) -> Decimal:
@@ -121,9 +134,11 @@ def _trade_count(session: Session, wallet: str | None) -> int:
 def _trade_rows(session: Session, wallet: str | None, *, after_id: int, limit: int):
     query = (
         "SELECT we.id AS event_id, we.wallet, we.condition_id, we.token_id, we.side, "
-        "we.ts, we.delta_shares, we.price, m.category AS market_category "
+        "we.ts, we.delta_shares, we.price, m.category AS market_category, "
+        "fen.fee AS observed_fee, fen.source AS observed_source "
         "FROM wallet_events we "
         "LEFT JOIN markets m ON m.condition_id = lower(we.condition_id) "
+        "LEFT JOIN fill_enrichment fen ON fen.event_id = we.id "
         "WHERE we.event_type = 'TRADE' AND we.id > :after_id "
     )
     params = {"after_id": after_id, "limit": limit}
@@ -150,21 +165,27 @@ def compute_fee_estimates(
     estimates_upserted = 0
     estimated_total = Decimal(0)
     worst_case_total = Decimal(0)
+    actual_total = Decimal(0)
+    fallback_total = Decimal(0)
+    blended_total = Decimal(0)
     category_classified = 0
     fee_estimated = 0
+    actual_enriched = 0
     unknown_category = 0
     last_id = 0
     batch_size = max(1, int(batch_size))
     upsert = text(
         "INSERT INTO fee_estimates "
         "(event_id, wallet, condition_id, token_id, category, ts, estimated_fee, worst_case_fee, "
-        "actual_fee, fee_currency, rule_name, confidence, computed_at) "
+        "actual_fee, fee_source, fee_currency, rule_name, confidence, computed_at) "
         "VALUES (:event_id, :wallet, :condition_id, :token_id, :category, :ts, "
-        ":estimated_fee, :worst_case_fee, NULL, 'USDC', :rule_name, :confidence, :computed_at) "
+        ":estimated_fee, :worst_case_fee, :actual_fee, :fee_source, 'USDC', "
+        ":rule_name, :confidence, :computed_at) "
         "ON CONFLICT(event_id) DO UPDATE SET "
         "wallet = excluded.wallet, condition_id = excluded.condition_id, "
         "token_id = excluded.token_id, category = excluded.category, ts = excluded.ts, "
         "estimated_fee = excluded.estimated_fee, worst_case_fee = excluded.worst_case_fee, "
+        "actual_fee = excluded.actual_fee, fee_source = excluded.fee_source, "
         "fee_currency = excluded.fee_currency, rule_name = excluded.rule_name, "
         "confidence = excluded.confidence, computed_at = excluded.computed_at"
     )
@@ -195,6 +216,16 @@ def compute_fee_estimates(
                 fee_estimated += 1
             estimated_total += fee
             worst_case_total += fee
+            actual = _actual_fee(row.observed_fee)
+            if actual is not None:
+                actual_enriched += 1
+                actual_total += actual
+                blended_total += actual
+                fee_source = f"actual_{row.observed_source or 'unknown'}"
+            else:
+                fallback_total += fee
+                blended_total += fee
+                fee_source = "estimated_schedule"
             batch_params.append(
                 {
                     "event_id": int(row.event_id),
@@ -205,6 +236,8 @@ def compute_fee_estimates(
                     "ts": int(row.ts),
                     "estimated_fee": str(fee),
                     "worst_case_fee": str(fee),
+                    "actual_fee": str(actual) if actual is not None else None,
+                    "fee_source": fee_source,
                     "rule_name": rule_name,
                     "confidence": confidence,
                     "computed_at": now,
@@ -223,8 +256,11 @@ def compute_fee_estimates(
         category_classified_trades=category_classified,
         fee_estimated_trades=fee_estimated,
         unknown_category_trades=unknown_category,
-        actual_enriched_trades=0,
+        actual_enriched_trades=actual_enriched,
         estimates_upserted=estimates_upserted,
         estimated_fee_total=estimated_total,
         worst_case_fee_total=worst_case_total,
+        actual_fee_total=actual_total,
+        estimated_fee_fallback_total=fallback_total,
+        blended_fee_total=blended_total,
     )

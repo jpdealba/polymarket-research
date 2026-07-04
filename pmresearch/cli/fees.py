@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import click
+from decimal import Decimal
 from sqlalchemy.exc import OperationalError
 
 from ..config import ensure_data_dirs, get_settings
@@ -30,15 +31,28 @@ def _echo_row(row: FeeAttributionRow) -> None:
             [
                 f"period={row.period}",
                 f"category={row.category}",
+                f"trade_count={row.trade_count}",
+                f"enriched_fee_count={row.enriched_fee_count}",
+                f"actual_fee_coverage_pct={row.actual_fee_coverage_pct.quantize(Decimal('0.01'))}",
                 f"buy_volume={row.buy_volume}",
                 f"gross_pnl={row.gross_pnl}",
                 f"estimated_fee={row.estimated_fee}",
                 f"worst_case_fee={row.worst_case_fee}",
-                f"estimated_net_pnl={row.estimated_net_pnl}",
                 f"actual_fee={_fmt(row.actual_fee)}",
+                f"estimated_fee_fallback={row.estimated_fee_fallback}",
+                f"blended_fee={row.blended_fee}",
+                f"estimated_net_pnl={row.estimated_net_pnl}",
                 f"actual_net_pnl={_fmt(row.actual_net_pnl)}",
+                f"net_pnl_after_blended_fees={row.blended_net_pnl}",
                 f"gross_roi={_fmt(row.gross_roi)}",
                 f"estimated_net_roi={_fmt(row.estimated_net_roi)}",
+                f"maker_trades={row.maker_trades}",
+                f"taker_trades={row.taker_trades}",
+                f"maker_volume={row.maker_volume}",
+                f"taker_volume={row.taker_volume}",
+                f"maker_fees={row.maker_fee}",
+                f"taker_fees={row.taker_fee}",
+                f"fee_sources={row.fee_source_summary}",
             ]
         )
     )
@@ -50,6 +64,11 @@ def _echo_coverage(coverage: FeeAttributionCoverage) -> None:
     click.echo(f"fee_estimated_trades={coverage.fee_estimated_trades}")
     click.echo(f"unknown_category_trades={coverage.unknown_category_trades}")
     click.echo(f"actual_enriched_trades={coverage.actual_enriched_trades}")
+    click.echo(f"actual_fee_coverage_pct={coverage.actual_fee_coverage_pct.quantize(Decimal('0.01'))}")
+    click.echo(f"actual_fee_total={coverage.actual_fee_total}")
+    click.echo(f"estimated_fee_total={coverage.estimated_fee_total}")
+    click.echo(f"estimated_fee_fallback_total={coverage.estimated_fee_fallback_total}")
+    click.echo(f"blended_fee_total={coverage.blended_fee_total}")
 
 
 def _utc(ts: int | None) -> str:
@@ -149,6 +168,9 @@ def fees_compute(wallet: str | None, batch_size: int) -> None:
     click.echo(f"fee_estimates_upserted={stats.estimates_upserted}")
     click.echo(f"estimated_fee_total={stats.estimated_fee_total}")
     click.echo(f"worst_case_fee_total={stats.worst_case_fee_total}")
+    click.echo(f"actual_fee_total={stats.actual_fee_total}")
+    click.echo(f"estimated_fee_fallback_total={stats.estimated_fee_fallback_total}")
+    click.echo(f"blended_fee_total={stats.blended_fee_total}")
 
 
 @fees_group.command("report")
@@ -185,8 +207,8 @@ def fees_report(wallet: str, by_category: bool, pre_post_sports_fee: bool) -> No
 
     click.echo(
         "wallet_events remains gross/base Data-API cashflow. "
-        "Fees are schedule estimates or taker worst-case until Phase 11 maker/taker fill enrichment; "
-        "actual_fee and actual_net_pnl are unavailable when not enriched."
+        "Fee reports preserve estimated fees, use observed fill_enrichment.fee where available, "
+        "and use schedule estimates as fallback for the blended net view."
     )
     _echo_coverage(coverage)
     for row in rows:

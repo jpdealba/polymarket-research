@@ -81,6 +81,24 @@ def _event(
     return int(session.execute(text("SELECT max(id) FROM wallet_events")).scalar())
 
 
+def _enrichment(session, event_id: int, *, fee: str | None, role: str = "maker", source: str = "subgraph") -> None:
+    session.execute(
+        text(
+            "INSERT INTO fill_enrichment "
+            "(event_id, role, order_hash, fee, counterparty, source, enriched_at) "
+            "VALUES (:event_id, :role, :order_hash, :fee, '0xother', :source, 'now')"
+        ),
+        {
+            "event_id": event_id,
+            "role": role,
+            "order_hash": f"0xorder{event_id}",
+            "fee": fee,
+            "source": source,
+        },
+    )
+    session.commit()
+
+
 def test_sports_trade_before_2026_03_30_gets_zero_fee(session):
     upsert_market_payloads(session, ([_market(COND_SPORTS, category="Sports")],), [COND_SPORTS])
     event_id = _event(session, tx="0xbefore", ts=SPORTS_FEE_START_TS - 1, condition_id=COND_SPORTS)
@@ -159,6 +177,133 @@ def test_actual_fee_remains_unavailable_without_phase_11_enrichment(session):
     assert row.worst_case_fee == Decimal("0.3750")
     assert row.actual_fee is None
     assert row.actual_net_pnl is None
+
+
+def test_enriched_trade_uses_fill_enrichment_fee_as_actual(session):
+    upsert_market_payloads(session, ([_market(COND_SPORTS, category="Sports")],), [COND_SPORTS])
+    event_id = _event(session, tx="0xactualfee", ts=SPORTS_FEE_START_TS, condition_id=COND_SPORTS)
+    _enrichment(session, event_id, fee="0.125", role="maker", source="subgraph")
+
+    stats = compute_fee_estimates(session, wallet=WALLET)
+    fee = session.execute(
+        text(
+            "SELECT estimated_fee, actual_fee, fee_source "
+            "FROM fee_estimates WHERE event_id = :id"
+        ),
+        {"id": event_id},
+    ).fetchone()
+    report = fee_attribution_report(session, wallet=WALLET)[0]
+
+    assert Decimal(fee.estimated_fee) == Decimal("0.3750")
+    assert Decimal(fee.actual_fee) == Decimal("0.125")
+    assert fee.fee_source == "actual_subgraph"
+    assert stats.actual_enriched_trades == 1
+    assert stats.actual_fee_total == Decimal("0.125")
+    assert stats.estimated_fee_fallback_total == Decimal("0")
+    assert stats.blended_fee_total == Decimal("0.125")
+    assert report.actual_fee == Decimal("0.125")
+    assert report.blended_fee == Decimal("0.125")
+    assert report.blended_net_pnl == Decimal("-50.125")
+
+
+def test_enriched_trade_with_null_fee_falls_back_to_estimate(session):
+    upsert_market_payloads(session, ([_market(COND_SPORTS, category="Sports")],), [COND_SPORTS])
+    event_id = _event(session, tx="0xnullfee", ts=SPORTS_FEE_START_TS, condition_id=COND_SPORTS)
+    _enrichment(session, event_id, fee=None, role="maker", source="rpc")
+
+    compute_fee_estimates(session, wallet=WALLET)
+    fee = session.execute(
+        text("SELECT estimated_fee, actual_fee, fee_source FROM fee_estimates WHERE event_id = :id"),
+        {"id": event_id},
+    ).fetchone()
+    row = fee_attribution_report(session, wallet=WALLET)[0]
+
+    assert Decimal(fee.estimated_fee) == Decimal("0.3750")
+    assert fee.actual_fee is None
+    assert fee.fee_source == "estimated_schedule"
+    assert row.actual_fee is None
+    assert row.estimated_fee_fallback == Decimal("0.3750")
+    assert row.blended_fee == Decimal("0.3750")
+
+
+def test_non_enriched_trade_uses_estimated_schedule_fallback(session):
+    upsert_market_payloads(session, ([_market(COND_SPORTS, category="Sports")],), [COND_SPORTS])
+    event_id = _event(session, tx="0xnoenrich", ts=SPORTS_FEE_START_TS, condition_id=COND_SPORTS)
+
+    stats = compute_fee_estimates(session, wallet=WALLET)
+    fee = session.execute(
+        text("SELECT actual_fee, fee_source FROM fee_estimates WHERE event_id = :id"),
+        {"id": event_id},
+    ).fetchone()
+
+    assert fee.actual_fee is None
+    assert fee.fee_source == "estimated_schedule"
+    assert stats.actual_enriched_trades == 0
+    assert stats.estimated_fee_fallback_total == Decimal("0.3750")
+    assert stats.blended_fee_total == Decimal("0.3750")
+
+
+def test_actual_fee_is_not_double_counted_with_estimate(session):
+    upsert_market_payloads(session, ([_market(COND_SPORTS, category="Sports")],), [COND_SPORTS])
+    actual_id = _event(session, tx="0xactualonly", ts=SPORTS_FEE_START_TS, condition_id=COND_SPORTS)
+    _event(session, tx="0xfallbackonly", ts=SPORTS_FEE_START_TS + 1, condition_id=COND_SPORTS)
+    _enrichment(session, actual_id, fee="0.1000", role="maker", source="rpc")
+
+    stats = compute_fee_estimates(session, wallet=WALLET)
+    coverage = fee_attribution_coverage(session, wallet=WALLET)
+    row = fee_attribution_report(session, wallet=WALLET)[0]
+
+    assert stats.estimated_fee_total == Decimal("0.7500")
+    assert stats.actual_fee_total == Decimal("0.1000")
+    assert stats.estimated_fee_fallback_total == Decimal("0.3750")
+    assert stats.blended_fee_total == Decimal("0.4750")
+    assert coverage.blended_fee_total == Decimal("0.475")
+    assert row.actual_fee == Decimal("0.1000")
+    assert row.estimated_fee_fallback == Decimal("0.3750")
+    assert row.blended_fee == Decimal("0.4750")
+
+
+def test_maker_taker_fee_breakdown_groups_by_enrichment_role(session):
+    upsert_market_payloads(session, ([_market(COND_SPORTS, category="Sports")],), [COND_SPORTS])
+    maker_id = _event(session, tx="0xmakerfee", ts=SPORTS_FEE_START_TS, condition_id=COND_SPORTS)
+    taker_id = _event(session, tx="0xtakerfee", ts=SPORTS_FEE_START_TS + 1, condition_id=COND_SPORTS)
+    _enrichment(session, maker_id, fee="0.01", role="maker", source="subgraph")
+    _enrichment(session, taker_id, fee="0.02", role="taker", source="rpc")
+
+    compute_fee_estimates(session, wallet=WALLET)
+    row = fee_attribution_report(session, wallet=WALLET)[0]
+
+    assert row.maker_trades == 1
+    assert row.taker_trades == 1
+    assert row.maker_volume == Decimal("50")
+    assert row.taker_volume == Decimal("50")
+    assert row.maker_fee == Decimal("0.01")
+    assert row.taker_fee == Decimal("0.02")
+    assert row.fee_source_counts == (("actual_rpc", 1), ("actual_subgraph", 1))
+
+
+def test_fee_report_cli_outputs_blended_totals(settings, session, monkeypatch):
+    monkeypatch.setenv("PMR_DATA_DIR", str(settings.data_dir))
+    upsert_market_payloads(session, ([_market(COND_SPORTS, category="Sports")],), [COND_SPORTS])
+    actual_id = _event(session, tx="0xcliactual", ts=SPORTS_FEE_START_TS, condition_id=COND_SPORTS)
+    _event(session, tx="0xclifallback", ts=SPORTS_FEE_START_TS + 1, condition_id=COND_SPORTS)
+    _enrichment(session, actual_id, fee="0.1", role="maker", source="subgraph")
+
+    result = CliRunner().invoke(
+        main,
+        ["fees", "report", "--wallet", WALLET, "--by-category", "--pre-post-sports-fee"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "total_trades=2" in result.output
+    assert "actual_enriched_trades=1" in result.output
+    assert "actual_fee_coverage_pct=50.00" in result.output
+    assert "actual_fee_total=0.1" in result.output
+    assert "estimated_fee_fallback_total=0.375" in result.output
+    assert "blended_fee_total=0.475" in result.output
+    assert "net_pnl_after_blended_fees=-100.4750" in result.output
+    assert "maker_trades=1" in result.output
+    assert "fee_sources=actual_subgraph:1,estimated_schedule:1" in result.output
 
 
 def test_fee_report_shows_gross_and_estimated_net_without_mutating_ledger(session):
