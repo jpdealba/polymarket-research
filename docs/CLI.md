@@ -3,7 +3,7 @@
 El ejecutable principal es `pmr`:
 
 ```bash
-pmr [COMANDO] [OPCIONES]
+pmr [COMANDO] [OPCiones]
 ```
 
 Todos los comandos aceptan `--help` para ver la ayuda integrada.
@@ -13,77 +13,248 @@ Todos los comandos aceptan `--help` para ver la ayuda integrada.
 | Variable | Default | Uso |
 | --- | --- | --- |
 | `PMR_DATA_DIR` | `/data` | Directorio raiz de datos persistentes: `db/`, `raw/`, `backups/`, `exports/`, `logs/`. |
-| `PMR_LOG_LEVEL` | `INFO` | Nivel de logging. |
-| `PMR_RPC_URL` | vacio | URL JSON-RPC de Polygon para el enriquecimiento por RPC (Fase 11, `eth_getLogs` de `OrderFilled`). Vacio = RPC apagado; el enriquecimiento por subgraph funciona igual. |
-| `PMR_SUBGRAPH_URL` | vacio | Endpoint del subgraph de orderbook de Goldsky (Fase 11). Vacio = subgraph no configurado; `pmr enrich run` da error claro y el job diario de enrichment hace no-op. |
-| `PMR_RCLONE_REMOTE` | vacio | Remote de rclone para operaciones externas de backup/sync. |
-| `PMR_DUST_EPSILON` | `0.000001` | Umbral de "dust": holdings con cantidad absoluta menor o igual se consideran planos (flat). |
+| `PMR_LOG_LEVEL` | `INFO` | Nivel de logging Python (DEBUG, INFO, WARNING, ERROR). |
+| `PMR_RPC_URL` | vacio | URL JSON-RPC de Polygon para enriquecimiento por RPC (Fase 11). Vacio = RPC apagado; solo funciona subgraph. |
+| `PMR_SUBGRAPH_URL` | vacio | Endpoint del subgraph de Goldsky (Fase 11). Vacio = subgraph deshabilitado; `pmr enrich run --source subgraph` da error. |
+| `PMR_RCLONE_REMOTE` | vacio | Remote de rclone para sync de backups a almacenamiento externo. Vacio = sin sync remoto. |
+| `PMR_DUST_EPSILON` | `0.000001` | Umbral de dust: holdings con |qty| <= epsilon se consideran planos (flat). |
+| `PMR_BACKUP_RETAIN` | `14` | Cantidad de backups a conservar en `ops/backup.sh`. Los mas viejos se eliminan. |
+| `PMR_BOOK_SAMPLE_INTERVAL_S` | `300` | Intervalo en segundos entre samples del orderbook (Fase 12). |
+| `PMR_BOOK_RETENTION_RAW_DAYS` | `30` | Dias de retencion para snapshots raw del book sampler. Summaries se conservan indefinidamente. |
+| `PMR_FINGERPRINT_WINDOW_DAYS` | `90` | Ventana trailing en dias para la variante de fingerprints (Fase 13). |
 
 ## Comandos
+
+### Root
 
 | Comando | Parametros | Que hace |
 | --- | --- | --- |
 | `pmr version` | ninguno | Imprime la version instalada de `pmresearch`. |
-| `pmr run` | ninguno | Ejecuta el scheduler del collector en primer plano. Es el comando pensado para el contenedor. |
+| `pmr run` | ninguno | Ejecuta el scheduler del collector en primer plano. Comando del contenedor Docker. |
+
+### db
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
 | `pmr db upgrade` | ninguno | Aplica todas las migraciones pendientes de Alembic a la base SQLite. |
 | `pmr db current` | ninguno | Muestra la revision actual de Alembic en la base de datos. |
+
+### backup / restore
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
 | `pmr backup` | ninguno | Crea un backup timestamped con `VACUUM INTO` en `{PMR_DATA_DIR}/backups/` e imprime la ruta. |
-| `pmr restore FILE` | `FILE`: archivo de backup existente | Restaura la base desde `FILE`, reemplazando la base activa. |
-| `pmr wallet add ADDRESS` | `ADDRESS`: wallet; `--name TEXT`: nombre visible opcional | Agrega una wallet a la watchlist. Si ya existe, lo informa sin duplicarla. |
-| `pmr wallet remove ADDRESS` | `ADDRESS`: wallet | Desactiva/remueve una wallet de la watchlist. |
+| `pmr restore FILE` | `FILE` (argumento, path existente) | Restaura la base desde `FILE`, reemplazando la base activa. |
+
+### wallet
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr wallet add ADDRESS` | `ADDRESS` (argumento); `--name TEXT` (opcional) | Agrega una wallet a la watchlist con nombre visible opcional. Si ya existe, lo informa. |
+| `pmr wallet remove ADDRESS` | `ADDRESS` (argumento) | Desactiva/remueve una wallet de la watchlist. |
 | `pmr wallet list` | ninguno | Lista wallets activas en la watchlist. |
-| `pmr sync backfill ADDRESS` | `ADDRESS`: wallet | Descarga el historial completo de actividad cruda para una wallet desde Data API y lo guarda en Raw Store. Imprime checkpoints de cursor mientras avanza; cada pagina cruda se persiste en Raw Store y cada checkpoint se commitea. |
-| `pmr sync incremental [ADDRESS]` | `ADDRESS`: wallet opcional | Sincroniza actividad nueva. Si no se pasa wallet, corre para todas las wallets activas de la watchlist. Imprime checkpoints de cursor y raw-storea/commitea paginas conforme se reciben. |
-| `pmr sync status` | ninguno | Muestra estado de sincronizacion por wallet: status, backfill, ultimo exito, fallas y ultimo error. |
-| `pmr ingest run` | `--wallet TEXT`: limita a una wallet | Procesa payloads crudos del Raw Store e inserta eventos nuevos en `wallet_events`. Imprime progreso por raw fetch; cada raw fetch se marca `ingested_at` y se commitea al terminar. |
-| `pmr ingest reparse` | `--wallet TEXT`: requerido | Reprocesa desde cero los payloads crudos de una wallet y vuelve a insertar su ledger. Imprime progreso por raw fetch y commitea por raw fetch. |
-| `pmr ledger stats` | `--wallet TEXT`: filtra por wallet; `--open-value TEXT`: valor USDC de posiciones abiertas, default `0` | Resume eventos del ledger, totales USDC, PnL y periodos antes/despues del fee deportivo de `2026-03-30`. Si necesita fee estimates para el escenario post-cutoff, imprime progreso y commitea ese calculo por batches. |
-| `pmr markets sync` | `--all`: sincroniza todos los `condition_id` del ledger; `--condition TEXT`: sincroniza uno o mas `condition_id` especificos | Descarga metadata de mercados desde Gamma y actualiza mercados, tokens y eventos. `--all` y `--condition` no se pueden combinar. |
-| `pmr markets stats` | ninguno | Muestra conteos de mercados, resueltos, descriptores sin clasificar y condiciones del ledger sin metadata. |
-| `pmr fees schedules` | ninguno | Muestra los schedules de fees configurados; si hace falta, siembra defaults. |
-| `pmr fees compute` | `--wallet TEXT`: limita a una wallet; `--batch-size INT`: trades por commit/progreso, default del modulo | Calcula estimaciones de fees por trade. Imprime progreso y commitea por batches configurables. |
-| `pmr fees report` | `--wallet TEXT`: requerido; `--by-category`: agrupa por categoria; `--pre-post-sports-fee`: separa antes/despues de `2026-03-30` | Genera reporte de atribucion de fees, PnL bruto/neto estimado, ROI y cobertura para una wallet. Si faltan estimaciones, las calcula con progreso y commits por batch antes del reporte. |
-| `pmr replay holdings` | `--wallet TEXT`: limita a una wallet; sin flag corre para todas las wallets del ledger | Reconstruye la proyeccion `holdings` (cantidad actual + WAC por wallet x token) replayeando `wallet_events` en orden `(ts, id)`. Imprime progreso durante el replay y hace flush/commit por batches al insertar holdings finales. Reporta warnings de calidad de datos. |
-| `pmr holdings show` | `--wallet TEXT`: requerido; `--nonzero`: solo holdings por encima del dust epsilon | Muestra la proyeccion de holdings con metadata de mercado (pregunta y outcome) cuando existe. |
-| `pmr holdings dq` | `--wallet TEXT`: requerido; `--json`: salida en JSON en vez de texto | Reporte de calidad de datos (Phase 4): holdings negativos con causa diagnosticada (evento y timestamp), `condition_id` de MERGE/REDEEM sin match en `markets` (clasificados como bug de encoding bytea `\x` vs `0x`, o realmente no disponibles en Gamma), holdings sin metadata de token, y eventos fuera del enum documentado del ledger (p. ej. `CONVERSION`). Solo lectura; no cambia `wallet_events` ni `holdings`. |
-| `pmr replay episodes` | `--wallet TEXT`: limita a una wallet; sin flag corre para todas las wallets del ledger | Reconstruye episodios flat-to-flat desde `wallet_events`, con cierres por flat o resolucion y warning si faltan tokens para eventos condition-scoped. Imprime progreso durante el replay y hace flush/commit por batches de episodios conforme se cierran; episodios abiertos se insertan al final. |
-| `pmr episodes show` | `--wallet TEXT`: requerido; `--token TEXT`: filtra por `token_id`; `--open`: solo episodios abiertos | Muestra episodios con open/close timestamp, razon de cierre, peak qty, WAC, PnL realizado, adds, partial exits, numero de eventos consumidos y token. |
-| `pmr episodes stats` | `--wallet TEXT`: requerido | Resume conteos de episodios, abiertos/cerrados/resolution, duraciones min/p50/p90/max, micro-episode share, PnL realizado y reward income. |
-| `pmr derive run` | `--wallet TEXT`: limita a una wallet; sin flag corre para todas las wallets del ledger | Inserta eventos derivados idempotentes para redenciones con proceeds reportados en cero, reconstruye episodios y actualiza la descomposicion de PnL. Imprime progreso en derivacion, episodios y PnL; commitea derivados/episodios por batches. |
-| `pmr pnl show` | `--wallet TEXT`: requerido; `--by-category`: muestra scopes por categoria | Muestra PnL descompuesto en directional, bond/merge, rewards, redemption, fees y total. |
-| `pmr equity build` | `--wallet TEXT`: limita a una wallet; sin flag usa wallets activas de watchlist o, si no hay, todas las del ledger | Construye `daily_equity` por dia UTC: portfolio value, PnL realizado acumulado, unrealized PnL, rewards acumulados, drawdown diario aproximado y `stale_equity_share`. Imprime progreso durante el replay y hace flush/commit por batches de `price_points` y `daily_equity`; tambien persiste marks con source, age y stale flag. |
-| `pmr equity show` | `--wallet TEXT`: requerido; `--limit INT`: filas finales a mostrar, default `10` | Muestra resumen y ultimas filas de la curva diaria de equity. Incluye la caveat de que el drawdown es daily-close based e intradia aproximado. |
-| `pmr exposure build` | `--wallet TEXT`: limita a una wallet; sin flag usa wallets activas de watchlist o, si no hay, todas las del ledger | Construye las proyecciones `exposures_daily` (exposicion market-level directional+bond o vector unclassified por wallet x condition x dia UTC) y `event_exposures_daily` (vector de exposicion por condition + neteo `net_after_exclusivity` para eventos negRisk). Despacha solo por `structure_type`; estructuras desconocidas van al camino unclassified con warning contado. Imprime progreso durante el replay y hace flush/commit por batches. |
-| `pmr exposure show` | `--wallet TEXT`: requerido; `--market TEXT`: filtra por `condition_id`; `--event TEXT`: filtra por `event_id`; `--limit INT`: filas finales a mostrar, default `10` | Muestra filas de exposicion. Sin `--event` muestra market-level (structure_type, directional, bond, event_id); con `--event` muestra el vector de exposicion del evento y su neteo. `--market` y `--event` no se pueden combinar. |
-| `pmr enrich run` | `--wallet TEXT`: limita a una wallet; sin flag usa wallets activas de watchlist o, si no hay, todas las del ledger; `--source [subgraph\|rpc]`: fuente, default `subgraph` (rpc solo si `PMR_RPC_URL` esta configurado, error claro si no); `--from-block INT`/`--to-block INT`: rango de bloques para `--source rpc` (`--to-block` requerido en ese modo) | Trae fills `OrderFilled` (subgraph de Goldsky o RPC) y los une a los eventos TRADE del ledger por (tx_hash, wallet, token, monto) — nunca por tx_hash solo. Convierte montos enteros de 6 decimales a shares para comparar contra `delta_shares`. Inserta en `fill_enrichment` de forma idempotente (`ON CONFLICT(event_id) DO NOTHING`), con role maker/taker, order_hash, fee (string decimal) y counterparty; deja sin enriquecer y loguea los casos ambiguos (varios candidatos con mismo monto). Nunca crea ni borra eventos del ledger; actualiza `enrichment_watermarks`. |
-| `pmr enrich coverage` | `--wallet TEXT`: limita a una wallet; sin flag usa wallets activas o del ledger | Muestra la cobertura de enrichment sobre los eventos TRADE, por bucket de recencia, distinguiendo enriched / pending (mas reciente que el head del subgraph — aun no reportado, no faltante) / ambiguous (gemelos con mismo tx+token+monto) / missing (viejo y sin enriquecer). Reporta tambien el `subgraph_head_ts`. |
-| `pmr reconcile run` | `--wallet TEXT`: requerido; `--json`: salida JSON estable | Ejecuta reconciliacion contra Data API: raw-storea `/positions`, compara `positions.size` contra `holdings.qty`, revisa WAC/realizedPnl cuando el oracle trae esos campos, agrega chequeo de portfolio value contra `/value` usando la ultima fila de `daily_equity`, persiste facts por batches y actualiza `wallet_trust`. En salida humana imprime progreso; con `--json` no imprime progreso para mantener JSON estable. |
-| `pmr reconcile status` | `--wallet TEXT`: opcional | Muestra la ultima reconciliacion por wallet: conteos, trust, excepciones conocidas, top discrepancias por cantidad/notional, negativos, holdings sin metadata presentes en `/positions`, discrepancias WAC/realizedPnl y resultado de `/value`. |
-| `pmr trust status` | `--wallet TEXT`: opcional | Muestra el estado derivado de confianza de cada wallet (`trusted`, `warn`, `untrusted`) y la razon de la ultima reconciliacion. |
+
+### sync
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr sync backfill ADDRESS` | `ADDRESS` (argumento) | Descarga historial completo de actividad desde Data API. Imprime checkpoints de cursor; cada pagina se persiste en Raw Store. |
+| `pmr sync incremental [ADDRESS]` | `ADDRESS` (argumento, opcional) | Sincroniza actividad nueva. Sin wallet = todas las activas de la watchlist. |
+| `pmr sync status` | ninguno | Muestra estado de sincronizacion: status, backfill, ultimo exito, fallas, ultimo error. |
+
+### ingest
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr ingest run` | `--wallet TEXT` (opcional) | Procesa payloads crudos del Raw Store e inserta eventos en `wallet_events`. Sin wallet = todas. |
+| `pmr ingest reparse` | `--wallet TEXT` (requerido) | Reprocesa desde cero los payloads crudos de una wallet. Borra y reinserta su ledger. |
+
+### ledger
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr ledger stats` | `--wallet TEXT` (opcional); `--open-value TEXT` (default `0`) | Resume eventos, totales USDC, PnL y periodos antes/despues del fee deportivo `2026-03-30`. |
+
+### markets
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr markets sync` | `--all` (flag); `--condition TEXT` (multiple, repetible) | Descarga metadata desde Gamma. `--all` = todos los condition_id del ledger. `--condition` = uno o mas especificos. No combinables. |
+| `pmr markets stats` | ninguno | Muestra conteos: total, resueltos, descriptores sin clasificar, condiciones sin metadata. |
+
+### fees
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr fees schedules` | ninguno | Muestra schedules de fees configurados; siembra defaults si faltan. |
+| `pmr fees compute` | `--wallet TEXT` (opcional); `--batch-size INT` (default `25000`, min `1`) | Calcula estimaciones de fees por trade. Progreso y commit por batches. |
+| `pmr fees report` | `--wallet TEXT` (requerido); `--by-category` (flag); `--pre-post-sports-fee` (flag) | Reporte de atribucion de fees, PnL bruto/neto, ROI y cobertura. Si faltan estimaciones, las calcula primero. |
+
+### replay
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr replay holdings` | `--wallet TEXT` (opcional) | Reconstruye proyeccion `holdings` (qty + WAC por wallet x token). Sin wallet = todas. |
+| `pmr replay episodes` | `--wallet TEXT` (opcional) | Reconstruye episodios flat-to-flat desde `wallet_events`. Sin wallet = todas. |
+
+### holdings
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr holdings show` | `--wallet TEXT` (requerido); `--nonzero` (flag) | Muestra holdings con metadata de mercado. `--nonzero` = solo por encima de dust. |
+| `pmr holdings dq` | `--wallet TEXT` (requerido); `--json` (flag) | Reporte de calidad: holdings negativos, condition_id sin match, holdings sin metadata, eventos fuera de enum. Solo lectura. |
+
+### episodes
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr episodes show` | `--wallet TEXT` (requerido); `--token TEXT` (opcional); `--open` (flag) | Muestra episodios: timestamps, razon de cierre, peak qty, WAC, PnL, adds, partial exits, eventos consumidos. |
+| `pmr episodes stats` | `--wallet TEXT` (requerido) | Resumen: conteos, abiertos/cerrados/resolution, duraciones p50/p90, micro-episode share, PnL realizado. |
+
+### derive
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr derive run` | `--wallet TEXT` (opcional) | Inserta REDEEM_PAYOUT derivados, reconstruye episodios y actualiza descomposicion PnL. Sin wallet = todas. |
+
+### pnl
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr pnl show` | `--wallet TEXT` (requerido); `--by-category` (flag) | Muestra PnL: directional, bond/merge, rewards, redemption, fees, total. `--by-category` = por categoria de mercado. |
+
+### equity
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr equity build` | `--wallet TEXT` (opcional) | Construye `daily_equity`: portfolio value, PnL realizado, unrealized, rewards, drawdown, stale_equity_share. Sin wallet = watchlist o todas. |
+| `pmr equity show` | `--wallet TEXT` (requerido); `--limit INT` (default `10`) | Muestra resumen y ultimas filas de la curva de equity. Drawdown es daily-close based. |
+
+### exposure
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr exposure build` | `--wallet TEXT` (opcional) | Construye `exposures_daily` (directional+bond o vector unclassified) y `event_exposures_daily` (vector + neteo negRisk). Sin wallet = watchlist o todas. |
+| `pmr exposure show` | `--wallet TEXT` (requerido); `--market TEXT` (opcional); `--event TEXT` (opcional); `--limit INT` (default `10`) | Muestra exposicion. Sin flags = market-level. `--event` = vector de evento. `--market` y `--event` no combinables. |
+
+### enrich
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr enrich run` | `--wallet TEXT` (opcional); `--source [subgraph\|rpc]` (default `subgraph`); `--from-block INT` (default `0`); `--to-block INT` (opcional); `--chunk-blocks INT` (default `200000`) | Trae fills OrderFilled y los une a TRADE por (tx_hash, wallet, token, monto). RPC requiere `PMR_RPC_URL`. `--chunk-blocks` = rango por llamada eth_getLogs. |
+| `pmr enrich coverage` | `--wallet TEXT` (opcional) | Muestra cobertura de enrichment: enriched / pending / ambiguous / missing por bucket de recencia. |
+
+### reconcile
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr reconcile run` | `--wallet TEXT` (requerido); `--json` (flag) | Reconciliacion contra Data API: `/positions` vs holdings, WAC/realizedPnl, `/value` vs daily_equity. Actualiza `wallet_trust`. |
+| `pmr reconcile status` | `--wallet TEXT` (opcional) | Muestra ultima reconciliacion: trust, excepciones, top discrepancias, negativos, WAC/realizedPnl, `/value`. |
+
+### trust
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr trust status` | `--wallet TEXT` (opcional) | Muestra estado de confianza: `trusted`, `warn`, `untrusted` y razon. |
+
+### books (Fase 12)
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr books sample-once` | ninguno | Snapshot del orderbook para Tokens Relevantes (posiciones abiertas + tradeados 24h). Almacena best_bid, best_ask, spread, mid, top-10 depth. |
+| `pmr books status` | ninguno | Estado del sampler: tokens trackeados, snapshots, almacenamiento, retencion. |
+| `pmr books prune` | ninguno | Elimina snapshots raw segun retencion. Advertencia si excede storage budget. |
+
+### fingerprints (Fase 13)
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr fingerprints compute` | `--wallet TEXT` (opcional) | Calcula features behaviorales: maker_fill_share, reward_income_share, bond_inventory_ratio, merge_frequency, episode_duration, etc. Por wallet y wallet×categoria. NULL cuando no computable. |
+| `pmr fingerprints show` | `--wallet TEXT` (requerido); `--scope TEXT` (opcional) | Muestra vector de fingerprint: features, valores, version, ventana. |
+| `pmr fingerprints compare` | `--wallets TEXT` (requerido, separadas por coma) | Compara fingerprints de multiples wallets lado a lado. |
+
+### detect (Fase 14)
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr detect run` | `--wallet TEXT` (opcional) | Ejecuta detectores (market_making, inventory_cycling, value_betting). Emite Strategy Labels con score 0-1, evidence y blind spots. |
+| `pmr detect show` | `--wallet TEXT` (requerido) | Muestra labels con scores y evidencia expandible. |
+| `pmr detect explain` | `--wallet TEXT` (requerido); `--detector TEXT` (requerido) | Explica un detector: features de entrada, valores, score final, blind spots. |
+
+### report (Fase 15)
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr report wallet ADDRESS` | `ADDRESS` (argumento); `--out PATH` (opcional); `--window TEXT` (opcional) | Genera reporte Markdown: descomposicion PnL, episodios, maker/taker, hipotesis estrategia, reconciliacion, limitaciones. Output a `/data/exports/` por defecto. |
+
+### acceptance (Fase 17)
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr acceptance` | ninguno | Verifica los 7 puntos de ADR 0006: reconciliacion, soak uptime, deletion-test, reportes, backups. Pass/fail con evidencia. |
 
 ## Flujos comunes
 
 ```bash
+# Infraestructura
 pmr db upgrade
 pmr wallet add 0x... --name "Wallet ejemplo"
 pmr sync backfill 0x...
 pmr ingest run --wallet 0x...
 pmr markets sync --all
+
+# Fees
+pmr fees compute --wallet 0x...
 pmr fees report --wallet 0x... --by-category --pre-post-sports-fee
+
+# Holdings y calidad de datos
 pmr replay holdings --wallet 0x...
 pmr holdings show --wallet 0x... --nonzero
 pmr holdings dq --wallet 0x...
+
+# Episodios
 pmr replay episodes --wallet 0x...
 pmr episodes stats --wallet 0x...
+
+# PnL derivado y descomposicion
 pmr derive run --wallet 0x...
 pmr pnl show --wallet 0x... --by-category
+
+# Equity diaria (Fase 9)
 pmr equity build --wallet 0x...
 pmr equity show --wallet 0x...
+
+# Exposicion (Fase 10)
 pmr exposure build --wallet 0x...
 pmr exposure show --wallet 0x... --event <event_id>
+
+# Enriquecimiento maker/taker (Fase 11)
 pmr enrich run --wallet 0x...
 pmr enrich coverage --wallet 0x...
+
+# Orderbook snapshots (Fase 12)
+pmr books sample-once
+pmr books status
+pmr books prune
+
+# Fingerprints behaviorales (Fase 13)
+pmr fingerprints compute --wallet 0x...
+pmr fingerprints show --wallet 0x...
+pmr fingerprints compare --wallets 0x...,0x...
+
+# Detectores de estrategia (Fase 14)
+pmr detect run --wallet 0x...
+pmr detect show --wallet 0x...
+pmr detect explain --wallet 0x... --detector market_making
+
+# Reportes (Fase 15)
+pmr report wallet 0x... --out /data/exports/rn1.md
+
+# Reconciliacion y confianza
 pmr reconcile run --wallet 0x...
 pmr reconcile status
 pmr trust status
+
+# Aceptacion MVP (Fase 17)
+pmr acceptance
 ```
