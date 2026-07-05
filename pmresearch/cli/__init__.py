@@ -15,6 +15,7 @@ from .detect import detect_group
 from .enrich import enrich_group
 from .episodes import episodes_group, replay_episodes
 from .equity import equity_group
+from .evidence import evidence_group
 from .exposure import exposure_group
 from .fees import fees_group
 from .fingerprints import fingerprints_group
@@ -62,6 +63,7 @@ main.add_command(acceptance)
 main.add_command(context_group)
 main.add_command(watchlist_group)
 main.add_command(worldcup_group)
+main.add_command(evidence_group)
 replay_group.add_command(replay_episodes)
 
 

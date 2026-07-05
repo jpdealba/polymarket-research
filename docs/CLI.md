@@ -188,6 +188,12 @@ Todos los comandos aceptan `--help` para ver la ayuda integrada.
 | --- | --- | --- |
 | `pmr report wallet ADDRESS` | `ADDRESS` (argumento); `--out PATH` (opcional); `--window TEXT` (opcional) | Genera reporte Markdown: descomposicion PnL, episodios, maker/taker, hipotesis estrategia, reconciliacion, limitaciones. Output a `/data/exports/` por defecto. |
 
+### evidence
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr evidence rn1-completion-sets` | `--wallet TEXT` (default RN1); `--out PATH` (default `docs/evidence/rn1_completion_sets/`) | Genera una auditoria read-only de la hipotesis completion-set / inventory-cycling: lifecycle por mercado, edge MERGE, orphans REDEEM, temporalidad, bridge PnL y Markdown resumen. |
+
 ### acceptance (Fase 17)
 
 | Comando | Parametros | Que hace |
@@ -250,6 +256,9 @@ pmr detect explain --wallet 0x... --detector market_making
 
 # Reportes (Fase 15)
 pmr report wallet 0x... --out /data/exports/rn1.md
+
+# Evidencia RN1 completion-set / inventory-cycling
+pmr evidence rn1-completion-sets --wallet 0x2005d16a84ceefa912d4e380cd32e7ff827875ea --out docs/evidence/rn1_completion_sets/
 
 # Reconciliacion y confianza
 pmr reconcile run --wallet 0x...
