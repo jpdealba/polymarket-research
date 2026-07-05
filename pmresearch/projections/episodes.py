@@ -20,6 +20,7 @@ from typing import Callable, Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from ..db.retry import retry_locked
 from ..ledger.replay import stream_events
 from .base import Projection
 
@@ -247,16 +248,23 @@ def rebuild_episodes(
     unmapped_conditions: set[str] = set()
     max_ts = 0
 
-    session.execute(text("DELETE FROM episodes WHERE wallet = :w"), {"w": wallet})
-    session.commit()
+    def _delete_existing() -> None:
+        session.execute(text("DELETE FROM episodes WHERE wallet = :w"), {"w": wallet})
+        session.commit()
+
+    retry_locked(session, _delete_existing)
     _emit_progress(on_progress, wallet, "start", 0, events_total, 0, None)
 
     def flush_rows() -> None:
         nonlocal rows_written
         if not rows:
             return
-        session.execute(_INSERT_SQL, rows)
-        session.commit()
+
+        def _insert() -> None:
+            session.execute(_INSERT_SQL, rows)
+            session.commit()
+
+        retry_locked(session, _insert)
         rows_written += len(rows)
         rows.clear()
         _emit_progress(

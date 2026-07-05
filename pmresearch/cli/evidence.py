@@ -10,6 +10,7 @@ from ..config import ensure_data_dirs, get_settings
 from ..db.engine import get_session_factory
 from ..evidence.completion_sets import analyze_completion_sets, write_audit
 from ..evidence.phase18_acceptance import analyze_phase18, write_reports
+from ..evidence.phase20_acceptance import write_reports as write_phase20_reports
 
 RN1_DEFAULT = "0x2005d16a84ceefa912d4e380cd32e7ff827875ea"
 
@@ -127,3 +128,25 @@ def phase18_acceptance(out: Path) -> None:
         click.echo("\nPhase 18 acceptance: PASS (no failing checks).")
     else:
         click.echo("\nPhase 18 acceptance: FAIL (see failing checks above).")
+
+
+@evidence_group.command("phase20-report")
+@click.option("--wallet", "wallet", default=RN1_DEFAULT, show_default=True)
+@click.option(
+    "--out", "out", type=click.Path(path_type=Path),
+    default=Path("docs/evidence/phase20_dataset/"), show_default=True,
+)
+def phase20_report(wallet: str, out: Path) -> None:
+    """Emit Phase 20 dataset quality reports for an already-built wallet dataset."""
+    settings = get_settings()
+    ensure_data_dirs(settings)
+    session = get_session_factory(settings)()
+    try:
+        paths = write_phase20_reports(session, wallet, out)
+    finally:
+        session.close()
+
+    click.echo(f"\nWallet: {wallet}")
+    click.echo("== Files written ==")
+    for p in paths:
+        click.echo(f"  {p}")
