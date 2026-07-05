@@ -27,6 +27,12 @@ else:
     types = [r.event_type for r in counts]
     cnts = [r.cnt for r in counts]
 
+    # TRADE typically dwarfs every other type (a hyperactive maker logs one
+    # event per fill), so a linear axis flattens MERGE/REDEEM/etc. to invisible
+    # slivers. Default to log scale so every type is legible; the text labels
+    # still show the true counts.
+    log_scale = st.checkbox("Escala logarítmica", value=True, key="ledger_log_scale")
+
     fig = go.Figure(
         go.Bar(
             x=types,
@@ -42,11 +48,12 @@ else:
             dict(
                 title="Events by Type",
                 xaxis_title="Event Type",
-                yaxis_title="Count",
+                yaxis_title="Count (log)" if log_scale else "Count",
                 showlegend=False,
             )
         )
     )
+    fig.update_yaxes(type="log" if log_scale else "linear")
     st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
 
     # Data table
