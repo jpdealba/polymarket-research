@@ -103,10 +103,18 @@ c3.metric("Tracked Wallets", len(status.tracked_wallets))
 c4.metric("Book Interval", f"{status.book_interval_s}s")
 
 c5, c6, c7, c8 = st.columns(4)
-c5.metric("Last Sample", format_ts(status.last_sample_run_ts))
-c6.metric("Latest Book", format_ts(status.latest_book_ts))
-c7.metric("Latest Wallet Event", format_ts(status.latest_wallet_event_ts))
-c8.metric("Last Context Build", format_ts(status.latest_context_ts))
+for col, label, ts in [
+    (c5, "Last Sample", status.last_sample_run_ts),
+    (c6, "Latest Book", status.latest_book_ts),
+    (c7, "Latest Wallet Event", status.latest_wallet_event_ts),
+    (c8, "Last Context Build", status.latest_context_ts),
+]:
+    with col:
+        st.markdown(
+            f"<div style='margin-bottom:-10px'><small>{label}</small></div>"
+            f"<div style='font-size:1.1rem;font-weight:600'>{format_ts(ts)}</div>",
+            unsafe_allow_html=True,
+        )
 
 if status.latest_book_age_s is None:
     st.warning("No World Cup book snapshot has been collected yet.")
@@ -248,6 +256,10 @@ def _fill_rows(pairs, wallet):
     ]
 
 st.header("Per-Wallet Fills and Coverage")
+if st.button("Refresh fills & coverage", key="refresh_fills"):
+    with st.spinner("Rebuilding fill context..."):
+        api.run_worldcup_context_cycle(settings)
+    st.rerun()
 wallet_columns = st.columns(len(wallet_view_options)) if wallet_view_options else []
 for col, w in zip(wallet_columns, wallet_view_options):
     with col:

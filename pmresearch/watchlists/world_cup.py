@@ -297,15 +297,33 @@ def build_world_cup_watchlist(
         if existing is None or token["priority"] < existing["priority"]:
             candidates[row.token_id] = token
 
+    # Directly add recently traded tokens that weren't captured by
+    # _market_token_rows (which only returns open markets).  This covers
+    # tokens whose market resolved but the wallet still traded on them
+    # within the lookback window.
+    for token_id in recent:
+        if token_id not in candidates:
+            candidates[token_id] = {
+                "token_id": token_id,
+                "condition_id": None,
+                "market_id": None,
+                "question": None,
+                "outcome_label": None,
+                "market_category": None,
+                "market_slug": None,
+                "source": "rn1_recent_trade_closed",
+                "priority": 10,
+                "reason": "rn1 traded recently on a resolved market",
+            }
+
     upserted = 0
     for token in candidates.values():
         if _upsert_watchlist_token(session, watchlist_id=watchlist_id, token=token, now=now):
             upserted += 1
 
-    # Retire tokens whose market has since resolved. _market_token_rows only
-    # yields open markets, so a resolved token simply drops out of `candidates`
-    # and would otherwise stay is_active=1 forever, making the book sampler
-    # hammer the CLOB with 404s for a closed market on every fast cycle.
+    # Retire tokens whose market has since resolved AND were not recently
+    # traded.  Recently traded tokens on resolved markets are kept active
+    # so the book sampler can still collect snapshots for them.
     session.execute(
         text(
             "UPDATE watchlist_tokens SET is_active = 0, last_seen_ts = :now "
@@ -314,9 +332,14 @@ def build_world_cup_watchlist(
             "  SELECT t.token_id FROM tokens t "
             "  JOIN markets m ON m.condition_id = t.condition_id "
             "  WHERE m.closed = 1"
+            ") "
+            "AND token_id NOT IN ("
+            "  SELECT DISTINCT we.token_id FROM wallet_events we "
+            "  WHERE we.wallet = :wallet AND we.event_type = 'TRADE' "
+            "  AND we.token_id IS NOT NULL AND we.ts >= :recent_cutoff"
             ")"
         ),
-        {"watchlist_id": watchlist_id, "now": now},
+        {"watchlist_id": watchlist_id, "now": now, "wallet": wallet.lower(), "recent_cutoff": now - 168 * 3600},
     )
     session.commit()
     active = session.execute(

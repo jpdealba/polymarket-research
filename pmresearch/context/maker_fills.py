@@ -142,9 +142,19 @@ def build_maker_fill_context(
     fills = _fill_rows(session, wallet=wallet, watchlist_id=watchlist_id)
     counts = {name: 0 for name in ("excellent", "good", "usable", "weak", "stale", "missing")}
     written = 0
+    skipped = 0
+
+    session.execute(
+        text("DELETE FROM maker_fill_context WHERE wallet = :wallet AND context_status = 'missing'"),
+        {"wallet": wallet.lower()},
+    )
+
     for fill in fills:
         before = _book_before(session, fill.token_id, int(fill.trade_ts))
         after = _book_after(session, fill.token_id, int(fill.trade_ts), max_age_s=max_age_s)
+        if before is None and after is None:
+            skipped += 1
+            continue
         params = _params(fill, before, after, max_age_s=max_age_s)
         counts[params["context_status"]] += 1
         session.execute(

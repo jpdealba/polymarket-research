@@ -53,7 +53,7 @@ from .walletmanager.manager import (
     list_sync_states,
     list_wallets,
 )
-from .walletmanager.scheduler import run_markets_refresh_cycle, run_worldcup_sync_cycle
+from .walletmanager.scheduler import run_markets_refresh_cycle, run_worldcup_context_cycle, run_worldcup_sync_cycle
 from .watchlists.world_cup import WatchlistBuildStats, build_world_cup_watchlist
 from .labels import (
     EventLabel,
@@ -143,6 +143,7 @@ __all__ = [
     "MakerFillContextRow",
     "BookHistoryRow",
     "run_markets_refresh_cycle",
+    "run_worldcup_context_cycle",
     "run_worldcup_sync_cycle",
     "build_world_cup_watchlist",
     "WatchlistBuildStats",
