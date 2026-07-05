@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from typing import Iterable
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 WORLD_CUP_KEYWORDS = (
@@ -209,6 +209,26 @@ def _upsert_watchlist_token(
     return inserted
 
 
+def _closed_token_metadata(session: Session, token_ids: list[str]) -> dict[str, dict]:
+    """Metadata for specific tokens regardless of market close status.
+
+    `_market_token_rows` only yields open markets, so tokens whose market has
+    resolved come back blank. We still have their rows in tokens/markets, so we
+    join them here to avoid null question/outcome in the watchlist."""
+    if not token_ids:
+        return {}
+    rows = session.execute(
+        text(
+            "SELECT t.token_id, t.condition_id, t.outcome_label, "
+            "m.question, m.slug AS market_slug, m.category AS market_category "
+            "FROM tokens t LEFT JOIN markets m ON m.condition_id = t.condition_id "
+            "WHERE t.token_id IN :ids"
+        ).bindparams(bindparam("ids", expanding=True)),
+        {"ids": token_ids},
+    ).fetchall()
+    return {row.token_id: dict(row._mapping) for row in rows}
+
+
 def _recent_trade_tokens(session: Session, wallet: str, *, recent_hours: int = 168) -> set[str]:
     cutoff = int(time.time()) - recent_hours * 3600
     rows = session.execute(
@@ -300,30 +320,39 @@ def build_world_cup_watchlist(
     # Directly add recently traded tokens that weren't captured by
     # _market_token_rows (which only returns open markets).  This covers
     # tokens whose market resolved but the wallet still traded on them
-    # within the lookback window.
-    for token_id in recent:
-        if token_id not in candidates:
-            candidates[token_id] = {
-                "token_id": token_id,
-                "condition_id": None,
-                "market_id": None,
-                "question": None,
-                "outcome_label": None,
-                "market_category": None,
-                "market_slug": None,
-                "source": "rn1_recent_trade_closed",
-                "priority": 10,
-                "reason": "rn1 traded recently on a resolved market",
-            }
+    # within the lookback window.  We look their metadata up separately so the
+    # row isn't blank in the dashboard even though the market is closed.
+    missing_ids = [tid for tid in recent if tid not in candidates]
+    metadata = _closed_token_metadata(session, missing_ids)
+    for token_id in missing_ids:
+        meta = metadata.get(token_id, {})
+        candidates[token_id] = {
+            "token_id": token_id,
+            "condition_id": meta.get("condition_id"),
+            "market_id": meta.get("condition_id"),
+            "question": meta.get("question"),
+            "outcome_label": meta.get("outcome_label"),
+            "market_category": meta.get("market_category"),
+            "market_slug": meta.get("market_slug"),
+            "source": "rn1_recent_trade_closed",
+            "priority": 10,
+            "reason": "rn1 traded recently on a resolved market",
+        }
 
     upserted = 0
     for token in candidates.values():
         if _upsert_watchlist_token(session, watchlist_id=watchlist_id, token=token, now=now):
             upserted += 1
 
-    # Retire tokens whose market has since resolved AND were not recently
-    # traded.  Recently traded tokens on resolved markets are kept active
-    # so the book sampler can still collect snapshots for them.
+    # Retire tokens whose market has resolved. Two cases:
+    #   * RN1 never traded/held it (speculative keyword pick that then
+    #     resolved): retire immediately — we have no reason to follow it.
+    #   * RN1 traded it recently: keep it only while its CLOB book is still
+    #     live (metadata often flags a market closed before its book drops),
+    #     otherwise the sampler just 404s it every cycle. We prune it once it
+    #     stops producing snapshots, with a grace window so a freshly-added
+    #     token gets a chance to be sampled first.
+    book_cutoff = now - 30 * 60
     session.execute(
         text(
             "UPDATE watchlist_tokens SET is_active = 0, last_seen_ts = :now "
@@ -333,13 +362,27 @@ def build_world_cup_watchlist(
             "  JOIN markets m ON m.condition_id = t.condition_id "
             "  WHERE m.closed = 1"
             ") "
-            "AND token_id NOT IN ("
-            "  SELECT DISTINCT we.token_id FROM wallet_events we "
-            "  WHERE we.wallet = :wallet AND we.event_type = 'TRADE' "
-            "  AND we.token_id IS NOT NULL AND we.ts >= :recent_cutoff"
+            "AND ("
+            # speculative resolved token RN1 never touched -> retire now
+            "  (token_id NOT IN ("
+            "     SELECT DISTINCT we.token_id FROM wallet_events we "
+            "     WHERE we.wallet = :wallet AND we.event_type = 'TRADE' "
+            "     AND we.token_id IS NOT NULL AND we.ts >= :recent_cutoff)"
+            "   AND token_id NOT IN ("
+            "     SELECT DISTINCT token_id FROM holdings WHERE wallet = :wallet))"
+            "  OR "
+            # traded-but-dead: no live book past the grace window -> prune
+            "  (first_seen_ts < :book_cutoff AND token_id NOT IN ("
+            "     SELECT DISTINCT token_id FROM book_snapshots WHERE ts >= :book_cutoff))"
             ")"
         ),
-        {"watchlist_id": watchlist_id, "now": now, "wallet": wallet.lower(), "recent_cutoff": now - 168 * 3600},
+        {
+            "watchlist_id": watchlist_id,
+            "now": now,
+            "wallet": wallet.lower(),
+            "recent_cutoff": now - 168 * 3600,
+            "book_cutoff": book_cutoff,
+        },
     )
     session.commit()
     active = session.execute(
