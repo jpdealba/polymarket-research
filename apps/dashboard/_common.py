@@ -130,7 +130,7 @@ def format_ts(ts: int | None) -> str:
         return "never"
     from datetime import datetime, timezone
 
-    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%d %b %H:%M")
 
 
 def empty_state(message: str):
