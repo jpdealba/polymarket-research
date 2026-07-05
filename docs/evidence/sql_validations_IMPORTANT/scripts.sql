@@ -2278,3 +2278,381 @@ FROM ranked
 WHERE edge_rank <= 50
 ORDER BY wallet_label, edge_rank;
 
+-- ============================================================
+-- Evento completo con contexto de book: RN1 y Mind.The.Gap
+-- vs Brazil-Norway (todos los sub-mercados negRisk del evento)
+--
+-- Objetivo:
+--   Reconstruir cada TRADE/MERGE/REDEEM de ambas wallets en el
+--   evento completo (47 mercados: O/U, spreads, exact score,
+--   halftime, team-to-advance, moneyline), con:
+--     - qty y cash-flow corriendo por token (WAC)
+--     - mejor book_snapshot antes/después de cada fill
+--     - clasificacion de calidad de contexto (excellent/good/
+--       usable/weak/stale/missing/non_trade)
+--
+-- Fix aplicado 2026-07-05 (ver docs/evidence/sql_validations_IMPORTANT/
+-- brazil_norway_full_event_rn1_gap_review_2026-07-05.md):
+--   PARTITION BY wallet, token_id  ->  PARTITION BY wallet, COALESCE(token_id, condition_id)
+--
+--   Motivo: MERGE y REDEEM siempre tienen token_id = NULL (la
+--   fuente no da atribucion por-token para esos tipos). SQL
+--   trata NULL como un solo valor de particion, asi que sin el
+--   COALESCE todas las filas MERGE/REDEEM de una wallet -sin
+--   importar la condicion/mercado- comparten una sola serie de
+--   cash-flow acumulado. Con el COALESCE cada condicion mantiene
+--   su propia serie, y ademas emerge senal correcta en los casos
+--   merge-parcial -> redeem-del-remanente de la misma condicion.
+--
+--   Las columnas token_qty_*/token_cash_out_*/token_running_wac_after
+--   son 100% confiables en filas TRADE tanto antes como despues del
+--   fix (token_id nunca es NULL ahi). El fix solo corrige su lectura
+--   en filas MERGE/REDEEM.
+-- ============================================================
+
+WITH target_wallets AS (
+  SELECT 'RN1' AS wallet_label,
+         '0x2005d16a84ceefa912d4e380cd32e7ff827875ea' AS wallet
+  UNION ALL
+  SELECT 'Mind.The.Gap' AS wallet_label,
+         '0x83255595ba1fadd2e734cb30a0fb8110301a19cc' AS wallet
+),
+event_candidates AS (
+  SELECT DISTINCT
+    m.event_id
+  FROM markets m
+  LEFT JOIN pm_events pe
+    ON pe.event_id = m.event_id
+  WHERE m.event_id IS NOT NULL
+    AND (
+      (LOWER(m.question) LIKE '%brazil%' OR LOWER(m.question) LIKE '%brasil%' OR LOWER(pe.title) LIKE '%brazil%' OR LOWER(pe.title) LIKE '%brasil%')
+      AND
+      (LOWER(m.question) LIKE '%norway%' OR LOWER(pe.title) LIKE '%norway%')
+    )
+),
+related_markets AS (
+  SELECT DISTINCT
+    m.condition_id,
+    m.event_id,
+    m.question
+  FROM markets m
+  LEFT JOIN pm_events pe
+    ON pe.event_id = m.event_id
+  WHERE m.event_id IN (SELECT event_id FROM event_candidates)
+     OR (
+       (LOWER(m.question) LIKE '%brazil%' OR LOWER(m.question) LIKE '%brasil%' OR LOWER(pe.title) LIKE '%brazil%' OR LOWER(pe.title) LIKE '%brasil%')
+       AND
+       (LOWER(m.question) LIKE '%norway%' OR LOWER(pe.title) LIKE '%norway%')
+     )
+),
+related_tokens AS (
+  SELECT
+    t.token_id,
+    t.condition_id,
+    t.outcome_label,
+    t.outcome_index
+  FROM tokens t
+  JOIN related_markets rm
+    ON rm.condition_id = t.condition_id
+),
+events AS (
+  SELECT
+    tw.wallet_label,
+    we.id,
+    we.wallet,
+    we.ts,
+    datetime(we.ts, 'unixepoch') AS utc,
+    we.event_type,
+    we.side,
+    we.token_id,
+    COALESCE(we.condition_id, rt.condition_id) AS condition_id,
+    rm.event_id,
+    rm.question,
+    rt.outcome_label,
+    rt.outcome_index,
+    CAST(we.delta_shares AS REAL) AS delta_shares,
+    CAST(we.delta_usdc AS REAL) AS delta_usdc,
+    CAST(we.price AS REAL) AS price,
+    CAST(we.usdc_size AS REAL) AS usdc_size,
+    we.tx_hash,
+    we.source,
+    we.is_derived
+  FROM wallet_events we
+  JOIN target_wallets tw
+    ON tw.wallet = we.wallet
+  LEFT JOIN related_tokens rt
+    ON rt.token_id = we.token_id
+  LEFT JOIN related_markets rm
+    ON rm.condition_id = COALESCE(we.condition_id, rt.condition_id)
+  WHERE rm.condition_id IS NOT NULL
+),
+running AS (
+  SELECT
+    e.*,
+
+    SUM(CASE WHEN token_id IS NOT NULL THEN delta_shares ELSE 0 END)
+      OVER (
+        PARTITION BY wallet, COALESCE(token_id, condition_id)
+        ORDER BY ts, id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      ) AS token_qty_after,
+
+    SUM(CASE WHEN token_id IS NOT NULL THEN delta_shares ELSE 0 END)
+      OVER (
+        PARTITION BY wallet, COALESCE(token_id, condition_id)
+        ORDER BY ts, id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      ) - COALESCE(delta_shares, 0) AS token_qty_before,
+
+    -SUM(COALESCE(delta_usdc, 0))
+      OVER (
+        PARTITION BY wallet, COALESCE(token_id, condition_id)
+        ORDER BY ts, id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      ) AS token_cash_out_after,
+
+    -SUM(COALESCE(delta_usdc, 0))
+      OVER (
+        PARTITION BY wallet, COALESCE(token_id, condition_id)
+        ORDER BY ts, id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      ) + COALESCE(delta_usdc, 0) AS token_cash_out_before
+  FROM events e
+),
+booked AS (
+  SELECT
+    r.*,
+
+    CASE
+      WHEN r.token_id IS NOT NULL THEN (
+        SELECT bs.ts
+        FROM book_snapshots bs
+        WHERE bs.token_id = r.token_id
+          AND bs.ts <= r.ts
+        ORDER BY bs.ts DESC
+        LIMIT 1
+      )
+      ELSE NULL
+    END AS book_before_ts,
+
+    CASE
+      WHEN r.token_id IS NOT NULL THEN (
+        SELECT bs.ts
+        FROM book_snapshots bs
+        WHERE bs.token_id = r.token_id
+          AND bs.ts >= r.ts
+        ORDER BY bs.ts ASC
+        LIMIT 1
+      )
+      ELSE NULL
+    END AS book_after_ts
+
+  FROM running r
+)
+SELECT
+  b.wallet_label,
+  b.id,
+  b.utc,
+  b.event_type,
+  b.side,
+
+  b.question,
+  b.outcome_label,
+  b.outcome_index,
+
+  b.token_id,
+  b.condition_id,
+  b.event_id,
+
+  b.delta_shares,
+  b.delta_usdc,
+  b.price,
+  b.usdc_size,
+
+  b.token_qty_before,
+  b.token_qty_after,
+  b.token_cash_out_before,
+  b.token_cash_out_after,
+
+  CASE
+    WHEN b.token_qty_after != 0 THEN b.token_cash_out_after / b.token_qty_after
+    ELSE NULL
+  END AS token_running_wac_after,
+
+  datetime(b.book_before_ts, 'unixepoch') AS book_before_utc,
+  b.ts - b.book_before_ts AS book_before_age_s,
+  bb.best_bid AS best_bid_before,
+  bb.best_ask AS best_ask_before,
+  bb.spread AS spread_before,
+  bb.mid AS mid_before,
+
+  b.price - CAST(bb.mid AS REAL) AS fill_minus_mid_before,
+  b.price - CAST(bb.best_bid AS REAL) AS fill_minus_bid_before,
+  CAST(bb.best_ask AS REAL) - b.price AS ask_minus_fill_before,
+
+  datetime(b.book_after_ts, 'unixepoch') AS book_after_utc,
+  b.book_after_ts - b.ts AS book_after_age_s,
+  ba.best_bid AS best_bid_after,
+  ba.best_ask AS best_ask_after,
+  ba.spread AS spread_after,
+  ba.mid AS mid_after,
+
+  CASE
+    WHEN b.event_type != 'TRADE' THEN 'non_trade'
+    WHEN b.book_before_ts IS NULL THEN 'missing'
+    WHEN b.ts - b.book_before_ts <= 5 THEN 'excellent'
+    WHEN b.ts - b.book_before_ts <= 15 THEN 'good'
+    WHEN b.ts - b.book_before_ts <= 30 THEN 'usable'
+    WHEN b.ts - b.book_before_ts <= 60 THEN 'weak'
+    ELSE 'stale'
+  END AS context_status,
+
+  b.source,
+  b.is_derived,
+  b.tx_hash
+FROM booked b
+LEFT JOIN book_snapshots bb
+  ON bb.token_id = b.token_id
+ AND bb.ts = b.book_before_ts
+LEFT JOIN book_snapshots ba
+  ON ba.token_id = b.token_id
+ AND ba.ts = b.book_after_ts
+ORDER BY
+  b.ts,
+  b.wallet_label,
+  b.condition_id,
+  b.token_id,
+  b.id;
+
+-- ============================================================
+-- Totales del evento Brazil-Norway: PnL neto + edge FIFO
+-- por wallet, agregado sobre las 47 preguntas del evento.
+--
+-- Combina:
+--   - cashflow real (TRADE+MERGE+REDEEM) = PnL neto realizado
+--   - FIFO complete-set matching (misma metodologia de la
+--     query "RN1 complete-set FIFO matching approximation"
+--     al inicio de este archivo) = edge promedio por set
+--
+-- Ver docs/evidence/sql_validations_IMPORTANT/
+-- brazil_norway_full_event_rn1_gap_review_2026-07-05.md §2.6
+-- para la lectura de resultados.
+-- ============================================================
+
+WITH target_wallets AS (
+  SELECT 'RN1' AS wallet_label, '0x2005d16a84ceefa912d4e380cd32e7ff827875ea' AS wallet
+  UNION ALL
+  SELECT 'Mind.The.Gap' AS wallet_label, '0x83255595ba1fadd2e734cb30a0fb8110301a19cc' AS wallet
+),
+event_candidates AS (
+  SELECT DISTINCT m.event_id
+  FROM markets m
+  LEFT JOIN pm_events pe ON pe.event_id = m.event_id
+  WHERE m.event_id IS NOT NULL
+    AND (LOWER(m.question) LIKE '%brazil%' OR LOWER(pe.title) LIKE '%brazil%')
+    AND (LOWER(m.question) LIKE '%norway%' OR LOWER(pe.title) LIKE '%norway%')
+),
+related_markets AS (
+  SELECT DISTINCT m.condition_id, m.event_id, m.question
+  FROM markets m
+  WHERE m.event_id IN (SELECT event_id FROM event_candidates)
+),
+binary_markets AS (
+  SELECT t.condition_id
+  FROM tokens t
+  JOIN related_markets rm ON rm.condition_id = t.condition_id
+  GROUP BY t.condition_id
+  HAVING COUNT(*) = 2
+),
+token_map AS (
+  SELECT t.condition_id, t.token_id, CAST(t.outcome_index AS INTEGER) AS outcome_index
+  FROM tokens t
+  JOIN binary_markets bm ON bm.condition_id = t.condition_id
+),
+buy_fills AS (
+  SELECT
+    we.id AS event_id,
+    tw.wallet_label,
+    we.wallet,
+    we.condition_id,
+    we.token_id,
+    tm.outcome_index,
+    we.ts,
+    ABS(CAST(we.delta_shares AS REAL)) AS qty,
+    CAST(we.price AS REAL) AS price
+  FROM wallet_events we
+  JOIN target_wallets tw ON tw.wallet = we.wallet
+  JOIN token_map tm ON tm.token_id = we.token_id AND tm.condition_id = we.condition_id
+  WHERE we.event_type = 'TRADE'
+    AND upper(COALESCE(we.side,'')) = 'BUY'
+    AND ABS(CAST(we.delta_shares AS REAL)) > 0
+    AND CAST(we.price AS REAL) > 0 AND CAST(we.price AS REAL) < 1
+),
+buy_lots AS (
+  SELECT bf.*,
+    COALESCE(SUM(qty) OVER (PARTITION BY wallet_label, condition_id, token_id ORDER BY ts, event_id ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),0) AS cum_qty_before,
+    SUM(qty) OVER (PARTITION BY wallet_label, condition_id, token_id ORDER BY ts, event_id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum_qty_after
+  FROM buy_fills bf
+),
+lots_0 AS (SELECT * FROM buy_lots WHERE outcome_index=0),
+lots_1 AS (SELECT * FROM buy_lots WHERE outcome_index=1),
+matched_pairs AS (
+  SELECT
+    l0.wallet_label, l0.condition_id,
+    l0.ts AS ts_0, l1.ts AS ts_1, ABS(l1.ts-l0.ts) AS leg_gap_s,
+    l0.price AS price_0, l1.price AS price_1,
+    (l0.price+l1.price) AS pair_cost,
+    (1.0-(l0.price+l1.price)) AS edge_per_pair,
+    MAX(l0.cum_qty_before,l1.cum_qty_before) AS match_start_qty,
+    MIN(l0.cum_qty_after,l1.cum_qty_after) AS match_end_qty,
+    (MIN(l0.cum_qty_after,l1.cum_qty_after)-MAX(l0.cum_qty_before,l1.cum_qty_before)) AS matched_qty
+  FROM lots_0 l0
+  JOIN lots_1 l1 ON l1.condition_id=l0.condition_id AND l1.wallet_label=l0.wallet_label
+   AND l0.cum_qty_after > l1.cum_qty_before AND l1.cum_qty_after > l0.cum_qty_before
+),
+valid_pairs AS (SELECT * FROM matched_pairs WHERE matched_qty > 0),
+edge_agg AS (
+  SELECT
+    wallet_label,
+    COUNT(*) AS matched_pair_rows,
+    COUNT(DISTINCT condition_id) AS binary_markets_matched,
+    SUM(matched_qty) AS matched_complete_sets,
+    SUM(matched_qty*pair_cost) AS total_pair_cost_usdc,
+    SUM(matched_qty*edge_per_pair) AS theoretical_edge_usdc,
+    SUM(matched_qty*edge_per_pair)/NULLIF(SUM(matched_qty),0) AS weighted_edge_per_pair,
+    AVG(leg_gap_s)/60.0 AS avg_leg_gap_min
+  FROM valid_pairs
+  GROUP BY wallet_label
+),
+cashflow AS (
+  SELECT
+    tw.wallet_label,
+    SUM(CAST(we.delta_usdc AS REAL)) AS net_cashflow_usdc,
+    SUM(CASE WHEN we.event_type='TRADE' THEN CAST(we.delta_usdc AS REAL) ELSE 0 END) AS trade_cashflow,
+    SUM(CASE WHEN we.event_type='MERGE' THEN CAST(we.delta_usdc AS REAL) ELSE 0 END) AS merge_cashflow,
+    SUM(CASE WHEN we.event_type='REDEEM' THEN CAST(we.delta_usdc AS REAL) ELSE 0 END) AS redeem_cashflow,
+    COUNT(DISTINCT CASE WHEN we.event_type='REDEEM' THEN we.condition_id END) AS conditions_redeemed
+  FROM wallet_events we
+  JOIN target_wallets tw ON tw.wallet = we.wallet
+  JOIN related_markets rm ON rm.condition_id = we.condition_id
+  GROUP BY tw.wallet_label
+)
+SELECT
+  cf.wallet_label,
+  ROUND(cf.net_cashflow_usdc,2) AS net_realized_pnl_usdc,
+  ROUND(cf.trade_cashflow,2) AS trade_cashflow,
+  ROUND(cf.merge_cashflow,2) AS merge_cashflow,
+  ROUND(cf.redeem_cashflow,2) AS redeem_cashflow,
+  cf.conditions_redeemed,
+  ea.matched_pair_rows,
+  ea.binary_markets_matched,
+  ROUND(ea.matched_complete_sets,2) AS matched_complete_sets,
+  ROUND(ea.total_pair_cost_usdc,2) AS total_pair_cost_usdc,
+  ROUND(ea.theoretical_edge_usdc,2) AS theoretical_edge_usdc,
+  ROUND(ea.weighted_edge_per_pair,6) AS weighted_edge_per_pair,
+  ROUND(100.0*ea.weighted_edge_per_pair,4) AS weighted_edge_cents,
+  ROUND(ea.avg_leg_gap_min,2) AS avg_leg_gap_min
+FROM cashflow cf
+LEFT JOIN edge_agg ea ON ea.wallet_label = cf.wallet_label
+ORDER BY cf.wallet_label;
+

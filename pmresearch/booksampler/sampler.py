@@ -56,18 +56,12 @@ def _persist_snapshot(
         # Synthetic empty from a fetch error — skip DB write.
         return False
 
-    exists = session.execute(
-        text(
-            "SELECT 1 FROM book_snapshots "
-            "WHERE token_id = :token_id AND ts = :ts"
-        ),
-        {"token_id": snap.token_id, "ts": int(snap.raw_fetch.file_path.stat().st_mtime)},
-    ).fetchone()
-
-    ts = int(snap.raw_fetch.file_path.stat().st_mtime) if snap.raw_fetch.file_path.exists() else 0
-    if ts == 0:
-        # Fallback: use current time
-        ts = int(datetime.now(timezone.utc).timestamp())
+    # Use wall-clock time, not the raw-fetch file's mtime: RawStore dedupes
+    # identical payloads by content hash across all history, so an unchanging
+    # (or empty) book returns the *original* file with its *original* mtime on
+    # every poll. Keying ts off that would collide with the first-ever snapshot
+    # for that content and silently stop writing new rows for stale/thin books.
+    ts = int(datetime.now(timezone.utc).timestamp())
 
     exists = session.execute(
         text(

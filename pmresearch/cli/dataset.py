@@ -32,18 +32,32 @@ def microstructure_group() -> None:
     default="usable",
     show_default=True,
 )
-def build(wallet: str, watchlist: str, min_context: str) -> None:
+@click.option(
+    "--source",
+    "context_source",
+    type=click.Choice(["all_fills", "maker_only"]),
+    default="all_fills",
+    show_default=True,
+)
+def build(wallet: str, watchlist: str, min_context: str, context_source: str) -> None:
     """Build/rebuild the microstructure_lifecycle_dataset rows for a wallet."""
     settings = get_settings()
     ensure_data_dirs(settings)
     session = get_session_factory(settings)()
     try:
         stats = build_microstructure_dataset(
-            session, wallet=wallet, watchlist=watchlist, min_context=min_context
+            session,
+            wallet=wallet,
+            watchlist=watchlist,
+            min_context=min_context,
+            context_source=context_source,
         )
     finally:
         session.close()
-    click.echo(f"fills_seen={stats.fills_seen} rows_written={stats.rows_written}")
+    click.echo(
+        f"context_source={stats.context_source} fills_seen={stats.fills_seen} "
+        f"rows_written={stats.rows_written}"
+    )
     click.echo(f"by_context_status={stats.by_context_status}")
     click.echo(f"by_close_path={stats.by_close_path}")
 

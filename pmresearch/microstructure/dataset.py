@@ -1,6 +1,7 @@
 """Phase 20 — Microstructure + Lifecycle Dataset builder.
 
-Joins each eligible `maker_fill_context` row (Phase 18) with:
+Joins each eligible fill-context row (Phase 18 all-fill context by default, or
+legacy maker/enriched context when requested) with:
   - book-before-derived microstructure features (depth/imbalance/distance),
   - per-fill inventory/exposure before & after (a single ledger replay pass,
     reusing `exposure/engine.py` + `exposure/negrisk.py`, the same primitives
@@ -14,10 +15,13 @@ Every feature that can't be computed gets an entry in that row's
 column per feature — see the Phase 20 plan doc's discussion. Realized PnL
 fields are attributed at the *episode* level (episodes don't split PnL across
 individual fills), a documented simplification, not a per-fill decomposition.
+`fill_size` is retained as the legacy notional-USDC copy-through from Phase 18;
+new consumers should prefer `fill_shares = abs(delta_shares)` and
+`fill_notional_usdc = abs(delta_usdc)` for unambiguous sizing.
 
 Read-only over the ledger: never mutates wallet_events, holdings or episodes
-(ADR 0006). It only reads maker_fill_context/episodes/book_snapshots/markets
-and writes to its own `microstructure_lifecycle_dataset` table.
+(ADR 0006). It only reads fill context/episodes/book_snapshots/markets and
+writes to its own `microstructure_lifecycle_dataset` table.
 """
 
 from __future__ import annotations
@@ -72,6 +76,7 @@ _QUANTITY_EVENT_TYPES = ("TRADE", "SPLIT", "MERGE", "REDEEM", "RESOLUTION_SETTLE
 class MicrostructureDatasetStats:
     wallet: str
     watchlist: str
+    context_source: str
     fills_seen: int
     rows_written: int
     by_close_path: dict[str, int]
@@ -101,23 +106,57 @@ def _trade_utc(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
 
-def _fill_rows(session: Session, *, wallet: str, watchlist: str, min_context: str) -> list:
+def _abs_text_sql(column: str) -> str:
+    return f"CASE WHEN {column} LIKE '-%' THEN substr({column}, 2) ELSE {column} END"
+
+
+def _fill_rows(
+    session: Session,
+    *,
+    wallet: str,
+    watchlist: str,
+    min_context: str,
+    context_source: str,
+) -> list:
     threshold = _CONTEXT_ORDER[min_context]
     statuses = [s for s, order in _CONTEXT_ORDER.items() if order >= threshold]
+    if context_source == "all_fills":
+        table = "all_fill_context"
+        alias = "afc"
+        role_expr = "COALESCE(afc.role, 'UNKNOWN')"
+    elif context_source == "maker_only":
+        table = "maker_fill_context"
+        alias = "mfc"
+        role_expr = "mfc.role"
+    else:
+        raise ValueError("context_source must be 'all_fills' or 'maker_only'")
+
     stmt = text(
-        "SELECT mfc.event_id, mfc.wallet, mfc.token_id, mfc.condition_id, mfc.trade_ts, "
-        "mfc.trade_utc, mfc.side, mfc.fill_price, mfc.fill_size, mfc.delta_usdc, mfc.role, "
-        "mfc.context_status, mfc.book_before_age_s, mfc.book_after_age_s, "
-        "mfc.best_bid_before, mfc.best_ask_before, mfc.mid_before, mfc.spread_before, "
-        "mfc.depth_top_before_json "
-        "FROM maker_fill_context mfc "
-        "JOIN watchlist_tokens wt ON wt.token_id = mfc.token_id "
+        f"SELECT {alias}.event_id, {alias}.wallet, {alias}.token_id, {alias}.condition_id, "
+        f"{alias}.trade_ts, {alias}.trade_utc, {alias}.side, {alias}.fill_price, "
+        f"{alias}.fill_size, "
+        f"COALESCE({alias}.fill_shares, {_abs_text_sql('we.delta_shares')}) AS fill_shares, "
+        f"COALESCE({alias}.fill_notional_usdc, {_abs_text_sql('we.delta_usdc')}) AS fill_notional_usdc, "
+        f"{alias}.delta_usdc, {role_expr} AS role, "
+        f"{alias}.context_status, {alias}.book_before_age_s, {alias}.book_after_age_s, "
+        f"{alias}.best_bid_before, {alias}.best_ask_before, {alias}.mid_before, {alias}.spread_before, "
+        f"{alias}.depth_top_before_json, :context_source AS context_source "
+        f"FROM {table} {alias} "
+        f"JOIN wallet_events we ON we.id = {alias}.event_id "
+        f"JOIN watchlist_tokens wt ON wt.token_id = {alias}.token_id "
         "JOIN watchlists wl ON wl.id = wt.watchlist_id AND wl.name = :watchlist "
-        "WHERE mfc.wallet = :wallet AND mfc.context_status IN :statuses "
-        "ORDER BY mfc.trade_ts, mfc.event_id"
+        f"WHERE {alias}.wallet = :wallet AND wt.is_active = 1 "
+        f"AND {alias}.context_status IN :statuses "
+        f"ORDER BY {alias}.trade_ts, {alias}.event_id"
     ).bindparams(bindparam("statuses", expanding=True))
     return session.execute(
-        stmt, {"wallet": wallet.lower(), "watchlist": watchlist, "statuses": statuses}
+        stmt,
+        {
+            "wallet": wallet.lower(),
+            "watchlist": watchlist,
+            "statuses": statuses,
+            "context_source": context_source,
+        },
     ).fetchall()
 
 
@@ -391,9 +430,16 @@ def build_microstructure_dataset(
     wallet: str,
     watchlist: str = "world_cup_2026",
     min_context: str = "usable",
+    context_source: str = "all_fills",
 ) -> MicrostructureDatasetStats:
     wallet = wallet.lower()
-    fills = _fill_rows(session, wallet=wallet, watchlist=watchlist, min_context=min_context)
+    fills = _fill_rows(
+        session,
+        wallet=wallet,
+        watchlist=watchlist,
+        min_context=min_context,
+        context_source=context_source,
+    )
     if not fills:
         def _delete_existing() -> None:
             session.execute(
@@ -402,7 +448,7 @@ def build_microstructure_dataset(
             session.commit()
 
         retry_locked(session, _delete_existing)
-        return MicrostructureDatasetStats(wallet, watchlist, 0, 0, {}, {})
+        return MicrostructureDatasetStats(wallet, watchlist, context_source, 0, 0, {}, {})
 
     target_event_ids = {int(f.event_id) for f in fills}
     target_tokens = {f.token_id for f in fills}
@@ -603,6 +649,8 @@ def build_microstructure_dataset(
                 "side": fill.side,
                 "fill_price": fill.fill_price,
                 "fill_size": fill.fill_size,
+                "fill_shares": fill.fill_shares,
+                "fill_notional_usdc": fill.fill_notional_usdc,
                 "delta_usdc": fill.delta_usdc,
                 "role": fill.role,
                 "context_status": fill.context_status,
@@ -650,6 +698,7 @@ def build_microstructure_dataset(
                 "null_reasons_json": json.dumps(null_reasons, sort_keys=True, separators=(",", ":")),
                 "dataset_version": DATASET_VERSION,
                 "watchlist": watchlist,
+                "context_source": fill.context_source,
                 "built_at": now,
             }
         )
@@ -675,6 +724,7 @@ def build_microstructure_dataset(
     return MicrostructureDatasetStats(
         wallet=wallet,
         watchlist=watchlist,
+        context_source=context_source,
         fills_seen=len(fills),
         rows_written=len(rows),
         by_close_path=by_close_path,

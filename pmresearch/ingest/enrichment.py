@@ -591,6 +591,21 @@ def _current_rpc_block(session: Session, wallet: str) -> Optional[int]:
     return int(row.rpc_synced_to_block)
 
 
+def max_rpc_watermark(session: Session, wallets: Iterable[str]) -> int:
+    """Highest `rpc_synced_to_block` already recorded across `wallets`, or 0.
+
+    Used as a floor for `get_block_number()`: the chain can't move
+    backwards, so a fresh head reading below this floor means the read hit
+    stale/inconsistent nodes, not that the chain regressed.
+    """
+    best = 0
+    for wallet in wallets:
+        block = _current_rpc_block(session, wallet)
+        if block is not None:
+            best = max(best, block)
+    return best
+
+
 def _current_subgraph_ts(session: Session, wallet: str) -> int:
     row = session.execute(
         text(

@@ -109,7 +109,7 @@ class PolygonscanSource:
             return payload
         raise RpcError(f"PolygonScan rate limit did not clear: {payload!r}")
 
-    def get_block_number(self) -> int:
+    def get_block_number(self, *, floor: int = 0, max_attempts: int = 5) -> int:
         """Etherscan's multichain proxy load-balances across nodes that can
         disagree by thousands of blocks on a single read. Take two reads and
         return the smaller: the true head can only move forward by a handful
@@ -117,10 +117,25 @@ class PolygonscanSource:
         stale/inconsistent node — using the lower value avoids advancing an
         enrichment watermark past a block that isn't really the chain head
         yet (which would strand it, since real reads for the true, lower
-        head afterward would never look forward enough to catch up)."""
-        first = int(self._get({"module": "proxy", "action": "eth_blockNumber"})["result"], 16)
-        second = int(self._get({"module": "proxy", "action": "eth_blockNumber"})["result"], 16)
-        return min(first, second)
+        head afterward would never look forward enough to catch up).
+
+        `floor` (typically the highest block already recorded as scanned)
+        guards the opposite failure: if BOTH reads land on stale nodes, the
+        min-of-two can come back *below* a watermark that a prior, good read
+        already cleared. The chain never moves backwards, so that only means
+        this attempt was unlucky — retry (keeping the best minimum seen
+        across attempts) rather than handing back a result that would make
+        every wallet's scan silently no-op for the whole cycle."""
+        best = 0
+        for attempt in range(max_attempts):
+            first = int(self._get({"module": "proxy", "action": "eth_blockNumber"})["result"], 16)
+            second = int(self._get({"module": "proxy", "action": "eth_blockNumber"})["result"], 16)
+            best = max(best, min(first, second))
+            if best >= floor:
+                return best
+            if attempt < max_attempts - 1:
+                self._sleep(1.0 + attempt)
+        return best
 
     def find_block_by_timestamp(self, ts: int, **_: object) -> int:
         payload = self._get(

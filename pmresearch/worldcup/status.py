@@ -47,7 +47,9 @@ class MakerFillContextRow:
     side: str | None
     fill_price: str | None
     fill_size: str | None
-    role: str
+    fill_shares: str | None
+    fill_notional_usdc: str | None
+    role: str | None
     book_before_age_s: int | None
     best_bid_before: str | None
     best_ask_before: str | None
@@ -124,6 +126,10 @@ def phase18_tables_exist(session: Session) -> bool:
         table_exists(session, name)
         for name in ("watchlists", "watchlist_tokens", "book_sample_runs", "maker_fill_context")
     )
+
+
+def all_fill_context_table_exists(session: Session) -> bool:
+    return table_exists(session, "all_fill_context")
 
 
 def tracked_wallets_table_exists(session: Session) -> bool:
@@ -262,6 +268,12 @@ def worldcup_collector_status(
     latest_context = session.execute(
         text("SELECT MAX(updated_at) FROM maker_fill_context")
     ).scalar()
+    if all_fill_context_table_exists(session):
+        latest_all_context = session.execute(
+            text("SELECT MAX(updated_at) FROM all_fill_context")
+        ).scalar()
+        if latest_all_context is not None:
+            latest_context = max(int(latest_context or 0), int(latest_all_context))
     return WorldCupCollectorStatus(
         tables_exist=True,
         enabled=settings.worldcup_watch_enabled,
@@ -303,7 +315,8 @@ def worldcup_recent_maker_fills(
     query = (
         "SELECT mfc.event_id, mfc.wallet, mfc.token_id, mfc.condition_id, "
         "mfc.trade_ts, mfc.trade_utc, mfc.side, mfc.fill_price, "
-        "mfc.fill_size, mfc.role, mfc.book_before_age_s, "
+        "mfc.fill_size, mfc.fill_shares, mfc.fill_notional_usdc, "
+        "mfc.role, mfc.book_before_age_s, "
         "mfc.best_bid_before, mfc.best_ask_before, "
         "mfc.spread_before, mfc.mid_before, "
         "mfc.book_after_age_s, mfc.best_bid_after, mfc.best_ask_after, "
@@ -324,6 +337,46 @@ def worldcup_recent_maker_fills(
     return [MakerFillContextRow(**dict(row._mapping)) for row in rows]
 
 
+def worldcup_recent_all_fills(
+    session: Session,
+    *,
+    wallet: str,
+    watchlist: str,
+    limit: int = 100,
+    role: str | None = None,
+) -> list[MakerFillContextRow]:
+    if not phase18_tables_exist(session) or not all_fill_context_table_exists(session):
+        return []
+    query = (
+        "SELECT afc.event_id, afc.wallet, afc.token_id, afc.condition_id, "
+        "afc.trade_ts, afc.trade_utc, afc.side, afc.fill_price, "
+        "afc.fill_size, afc.fill_shares, afc.fill_notional_usdc, "
+        "afc.role, afc.book_before_age_s, "
+        "afc.best_bid_before, afc.best_ask_before, "
+        "afc.spread_before, afc.mid_before, "
+        "afc.book_after_age_s, afc.best_bid_after, afc.best_ask_after, "
+        "afc.context_status, "
+        "afc.null_reason, wt.question, wt.outcome_label "
+        "FROM all_fill_context afc "
+        "JOIN watchlists w ON w.name = :watchlist "
+        "JOIN watchlist_tokens wt ON wt.watchlist_id = w.id "
+        "AND wt.token_id = afc.token_id AND wt.is_active = 1 "
+        "WHERE afc.wallet = :wallet "
+    )
+    params: dict[str, object] = {"wallet": wallet.lower(), "watchlist": watchlist, "limit": limit}
+    if role is not None:
+        query += "AND afc.role = :role "
+        params["role"] = role
+    query += "ORDER BY afc.trade_ts DESC, afc.event_id DESC LIMIT :limit"
+    rows = session.execute(text(query), params).fetchall()
+    return [
+        MakerFillContextRow(
+            **{**dict(row._mapping), "role": row.role if row.role is not None else "UNKNOWN"}
+        )
+        for row in rows
+    ]
+
+
 def worldcup_context_coverage(
     session: Session,
     *,
@@ -338,6 +391,41 @@ def worldcup_context_coverage(
         query += "AND role = :role "
         params["role"] = role
     query += "GROUP BY context_status"
+    rows = session.execute(text(query), params).fetchall()
+    counts = {row.context_status: int(row.cnt) for row in rows}
+    return WorldCupContextCoverage(
+        total=sum(counts.values()),
+        excellent=counts.get("excellent", 0),
+        good=counts.get("good", 0),
+        usable=counts.get("usable", 0),
+        weak=counts.get("weak", 0),
+        stale=counts.get("stale", 0),
+        missing=counts.get("missing", 0),
+    )
+
+
+def worldcup_all_context_coverage(
+    session: Session,
+    *,
+    wallet: str,
+    watchlist: str,
+    role: str | None = None,
+) -> WorldCupContextCoverage:
+    if not phase18_tables_exist(session) or not all_fill_context_table_exists(session):
+        return WorldCupContextCoverage(0, 0, 0, 0, 0, 0, 0)
+    query = (
+        "SELECT afc.context_status, COUNT(*) AS cnt "
+        "FROM all_fill_context afc "
+        "JOIN watchlists w ON w.name = :watchlist "
+        "JOIN watchlist_tokens wt ON wt.watchlist_id = w.id "
+        "AND wt.token_id = afc.token_id AND wt.is_active = 1 "
+        "WHERE afc.wallet = :wallet "
+    )
+    params: dict[str, object] = {"wallet": wallet.lower(), "watchlist": watchlist}
+    if role is not None:
+        query += "AND afc.role = :role "
+        params["role"] = role
+    query += "GROUP BY afc.context_status"
     rows = session.execute(text(query), params).fetchall()
     counts = {row.context_status: int(row.cnt) for row in rows}
     return WorldCupContextCoverage(

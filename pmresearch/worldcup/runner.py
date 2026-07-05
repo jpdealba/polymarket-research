@@ -8,7 +8,12 @@ from dataclasses import dataclass
 
 from ..booksampler.watchlist import WatchlistSampleStats, sample_watchlist_once
 from ..config import Settings
-from ..context.maker_fills import MakerFillContextStats, build_maker_fill_context
+from ..context.maker_fills import (
+    AllFillContextStats,
+    MakerFillContextStats,
+    build_all_fill_context,
+    build_maker_fill_context,
+)
 from ..db.engine import get_session_factory
 from ..ingest.enrichment import run_enrichment
 from ..ingest.runner import IngestStats, run_ingest
@@ -28,6 +33,7 @@ class WorldCupTickStats:
     holdings: HoldingsRebuildStats
     watchlist: WatchlistBuildStats
     sample: WatchlistSampleStats
+    all_context: AllFillContextStats
     context: MakerFillContextStats
     enrichment_ran: bool
 
@@ -67,6 +73,12 @@ def tick_worldcup(settings: Settings, *, wallet: str) -> WorldCupTickStats:
     )
     session = get_session_factory(settings)()
     try:
+        all_context = build_all_fill_context(
+            session,
+            wallet=wallet,
+            watchlist=settings.worldcup_watchlist_name,
+            max_age_s=settings.worldcup_context_max_age_s,
+        )
         context = build_maker_fill_context(
             session,
             wallet=wallet,
@@ -81,6 +93,7 @@ def tick_worldcup(settings: Settings, *, wallet: str) -> WorldCupTickStats:
         holdings=holdings,
         watchlist=watchlist,
         sample=sample,
+        all_context=all_context,
         context=context,
         enrichment_ran=enrichment_ran,
     )
@@ -93,11 +106,12 @@ def watch_worldcup(settings: Settings, *, wallet: str) -> None:
             stats = tick_worldcup(settings, wallet=wallet)
             logger.info(
                 "World Cup tick: sync_rows=%d ingest_inserted=%d watch_tokens=%d "
-                "sampled=%d contexts=%d",
+                "sampled=%d all_contexts=%d maker_contexts=%d",
                 stats.sync.rows_fetched,
                 stats.ingest.events_inserted,
                 stats.watchlist.active_tokens,
                 stats.sample.tokens_sampled,
+                stats.all_context.contexts_written,
                 stats.context.contexts_written,
             )
         except Exception:

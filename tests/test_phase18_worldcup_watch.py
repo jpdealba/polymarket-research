@@ -273,6 +273,58 @@ def test_book_after_is_never_entry_context(session):
     assert row.book_after_ts == 1001
 
 
+def test_all_fill_context_includes_unenriched_fills_but_maker_context_does_not(session):
+    _seed_market(session, token_id="tok_wc")
+    from pmresearch.context.maker_fills import build_all_fill_context, build_maker_fill_context
+    from pmresearch.watchlists.world_cup import add_manual_token
+    from pmresearch.worldcup.status import (
+        worldcup_all_context_coverage,
+        worldcup_context_coverage,
+        worldcup_recent_all_fills,
+    )
+
+    add_manual_token(session, name="world_cup_2026", token_id="tok_wc")
+    event_id = _seed_trade(session, token_id="tok_wc", ts=1000)
+    _seed_snapshot(session, token_id="tok_wc", ts=997)
+
+    all_stats = build_all_fill_context(
+        session, wallet="0xabc", watchlist="world_cup_2026", max_age_s=60
+    )
+    maker_stats = build_maker_fill_context(
+        session, wallet="0xabc", watchlist="world_cup_2026", max_age_s=60
+    )
+
+    assert all_stats.fills_seen == 1
+    assert all_stats.contexts_written == 1
+    assert all_stats.unenriched == 1
+    assert maker_stats.fills_seen == 0
+
+    row = session.execute(
+        text(
+            "SELECT event_id, role, context_status, fill_shares, fill_notional_usdc "
+            "FROM all_fill_context"
+        )
+    ).fetchone()
+    assert row.event_id == event_id
+    assert row.role is None
+    assert row.context_status == "good"
+    assert Decimal(row.fill_shares) == Decimal("10")
+    assert Decimal(row.fill_notional_usdc) == Decimal("5")
+
+    all_coverage = worldcup_all_context_coverage(
+        session, wallet="0xabc", watchlist="world_cup_2026"
+    )
+    maker_coverage = worldcup_context_coverage(session, wallet="0xabc", role="maker")
+    recent = worldcup_recent_all_fills(
+        session, wallet="0xabc", watchlist="world_cup_2026", limit=10
+    )
+
+    assert all_coverage.total == 1
+    assert all_coverage.good == 1
+    assert maker_coverage.total == 0
+    assert recent[0].role == "UNKNOWN"
+
+
 def test_worldcup_scheduler_jobs_only_when_enabled(settings):
     from pmresearch.walletmanager.scheduler import build_scheduler
 

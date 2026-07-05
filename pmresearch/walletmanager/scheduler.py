@@ -252,7 +252,7 @@ def run_worldcup_enrichment_cycle(settings: Settings) -> None:
         )
         return
 
-    from ..ingest.enrichment import _current_subgraph_ts, run_enrichment
+    from ..ingest.enrichment import _current_subgraph_ts, max_rpc_watermark, run_enrichment
     from ..sources.polygonscan import PolygonscanSource
     from ..worldcup.status import worldcup_tracked_wallets
 
@@ -263,7 +263,16 @@ def run_worldcup_enrichment_cycle(settings: Settings) -> None:
         if not wallets:
             logger.warning("World Cup enrichment skipped: no tracked wallets selected.")
             return
-        head_block = block_source.get_block_number()
+        floor = max_rpc_watermark(session, wallets)
+        head_block = block_source.get_block_number(floor=floor)
+        if head_block < floor:
+            logger.warning(
+                "World Cup enrichment: head block %d still below watermark floor %d "
+                "after retries; skipping this cycle.",
+                head_block,
+                floor,
+            )
+            return
         for address in wallets:
             try:
                 subgraph_ts = _current_subgraph_ts(session, address)
@@ -463,7 +472,7 @@ def run_worldcup_book_sample_cycle(settings: Settings) -> None:
 
 
 def run_worldcup_context_cycle(settings: Settings) -> None:
-    from ..context.maker_fills import build_maker_fill_context
+    from ..context.maker_fills import build_all_fill_context, build_maker_fill_context
     from ..worldcup.status import worldcup_tracked_wallets
 
     session = get_session_factory(settings)()
@@ -473,6 +482,12 @@ def run_worldcup_context_cycle(settings: Settings) -> None:
             logger.warning("World Cup context skipped: no tracked wallets selected.")
             return
         for wallet in wallets:
+            all_stats = build_all_fill_context(
+                session,
+                wallet=wallet,
+                watchlist=settings.worldcup_watchlist_name,
+                max_age_s=settings.worldcup_context_max_age_s,
+            )
             stats = build_maker_fill_context(
                 session,
                 wallet=wallet,
@@ -480,8 +495,12 @@ def run_worldcup_context_cycle(settings: Settings) -> None:
                 max_age_s=settings.worldcup_context_max_age_s,
             )
             logger.info(
-                "World Cup fill context %s: fills=%d written=%d good_or_better=%d",
+                "World Cup fill context %s: all_fills=%d all_written=%d "
+                "unenriched=%d maker_fills=%d maker_written=%d maker_good_or_better=%d",
                 wallet,
+                all_stats.fills_seen,
+                all_stats.contexts_written,
+                all_stats.unenriched,
                 stats.fills_seen,
                 stats.contexts_written,
                 stats.excellent + stats.good,

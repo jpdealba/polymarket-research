@@ -22,6 +22,20 @@ class MakerFillContextStats:
     missing: int
 
 
+@dataclass(frozen=True)
+class AllFillContextStats:
+    fills_seen: int
+    contexts_written: int
+    enriched: int
+    unenriched: int
+    excellent: int
+    good: int
+    usable: int
+    weak: int
+    stale: int
+    missing: int
+
+
 def _trade_utc(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
@@ -55,13 +69,48 @@ def _fill_rows(session: Session, *, wallet: str, watchlist_id: int):
         text(
             "SELECT we.id AS event_id, we.wallet, we.token_id, we.condition_id, "
             "we.ts AS trade_ts, we.side, we.price AS fill_price, "
-            "we.usdc_size AS fill_size, we.delta_usdc, fe.role "
+            "we.usdc_size AS fill_size, "
+            "CASE WHEN we.delta_shares LIKE '-%' THEN substr(we.delta_shares, 2) "
+            "ELSE we.delta_shares END AS fill_shares, "
+            "CASE WHEN we.delta_usdc LIKE '-%' THEN substr(we.delta_usdc, 2) "
+            "ELSE we.delta_usdc END AS fill_notional_usdc, "
+            "we.delta_usdc, fe.role "
             "FROM wallet_events we "
             "JOIN fill_enrichment fe ON fe.event_id = we.id "
             "JOIN watchlist_tokens wt ON wt.token_id = we.token_id "
             "WHERE wt.watchlist_id = :watchlist_id AND wt.is_active = 1 "
             "AND we.wallet = :wallet AND we.event_type = 'TRADE' "
             "AND fe.role IN ('maker', 'taker') AND we.token_id IS NOT NULL "
+            "ORDER BY we.ts, we.id"
+        ),
+        {"watchlist_id": watchlist_id, "wallet": wallet.lower()},
+    ).fetchall()
+
+
+def _all_fill_rows(session: Session, *, wallet: str, watchlist_id: int):
+    """All wallet TRADE rows for active watchlist tokens.
+
+    `fill_enrichment` is optional here: role is useful when known, but lack of
+    enrichment must not hide a trade that already has ledger and book context.
+    `fill_size` is kept as the legacy notional-USDC field; the explicit
+    `fill_shares` and `fill_notional_usdc` columns remove that ambiguity.
+    """
+    return session.execute(
+        text(
+            "SELECT we.id AS event_id, we.wallet, we.token_id, we.condition_id, "
+            "we.ts AS trade_ts, we.side, we.price AS fill_price, "
+            "we.usdc_size AS fill_size, "
+            "CASE WHEN we.delta_shares LIKE '-%' THEN substr(we.delta_shares, 2) "
+            "ELSE we.delta_shares END AS fill_shares, "
+            "CASE WHEN we.delta_usdc LIKE '-%' THEN substr(we.delta_usdc, 2) "
+            "ELSE we.delta_usdc END AS fill_notional_usdc, "
+            "we.delta_usdc, fe.role "
+            "FROM wallet_events we "
+            "JOIN watchlist_tokens wt ON wt.token_id = we.token_id "
+            "LEFT JOIN fill_enrichment fe ON fe.event_id = we.id "
+            "WHERE wt.watchlist_id = :watchlist_id AND wt.is_active = 1 "
+            "AND we.wallet = :wallet AND we.event_type = 'TRADE' "
+            "AND we.token_id IS NOT NULL "
             "ORDER BY we.ts, we.id"
         ),
         {"watchlist_id": watchlist_id, "wallet": wallet.lower()},
@@ -105,6 +154,8 @@ def _params(fill, before, after, *, max_age_s: int) -> dict:
         "side": fill.side,
         "fill_price": fill.fill_price,
         "fill_size": fill.fill_size,
+        "fill_shares": getattr(fill, "fill_shares", None),
+        "fill_notional_usdc": getattr(fill, "fill_notional_usdc", None),
         "delta_usdc": fill.delta_usdc,
         "role": fill.role,
         "book_before_ts": None if before is None else before.ts,
@@ -161,20 +212,23 @@ def build_maker_fill_context(
             text(
                 "INSERT INTO maker_fill_context "
                 "(event_id, wallet, token_id, condition_id, trade_ts, trade_utc, side, "
-                "fill_price, fill_size, delta_usdc, role, book_before_ts, "
+                "fill_price, fill_size, fill_shares, fill_notional_usdc, delta_usdc, role, book_before_ts, "
                 "book_before_age_s, best_bid_before, best_ask_before, spread_before, "
                 "mid_before, depth_top_before_json, book_after_ts, book_after_age_s, "
                 "best_bid_after, best_ask_after, spread_after, mid_after, "
                 "depth_top_after_json, context_status, null_reason, created_at, updated_at) "
                 "VALUES (:event_id, :wallet, :token_id, :condition_id, :trade_ts, "
-                ":trade_utc, :side, :fill_price, :fill_size, :delta_usdc, :role, "
-                ":book_before_ts, :book_before_age_s, :best_bid_before, "
+                ":trade_utc, :side, :fill_price, :fill_size, :fill_shares, "
+                ":fill_notional_usdc, :delta_usdc, :role, :book_before_ts, "
+                ":book_before_age_s, :best_bid_before, "
                 ":best_ask_before, :spread_before, :mid_before, "
                 ":depth_top_before_json, :book_after_ts, :book_after_age_s, "
                 ":best_bid_after, :best_ask_after, :spread_after, :mid_after, "
                 ":depth_top_after_json, :context_status, :null_reason, "
                 ":created_at, :updated_at) "
                 "ON CONFLICT(event_id) DO UPDATE SET "
+                "fill_shares = excluded.fill_shares, "
+                "fill_notional_usdc = excluded.fill_notional_usdc, "
                 "book_before_ts = excluded.book_before_ts, "
                 "book_before_age_s = excluded.book_before_age_s, "
                 "best_bid_before = excluded.best_bid_before, "
@@ -200,6 +254,88 @@ def build_maker_fill_context(
     return MakerFillContextStats(
         fills_seen=len(fills),
         contexts_written=written,
+        excellent=counts["excellent"],
+        good=counts["good"],
+        usable=counts["usable"],
+        weak=counts["weak"],
+        stale=counts["stale"],
+        missing=counts["missing"],
+    )
+
+
+def build_all_fill_context(
+    session: Session,
+    *,
+    wallet: str,
+    watchlist: str = "world_cup_2026",
+    max_age_s: int = 30,
+) -> AllFillContextStats:
+    watchlist_id = _watchlist_id(session, watchlist)
+    if watchlist_id is None:
+        return AllFillContextStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+    wallet = wallet.lower()
+    fills = _all_fill_rows(session, wallet=wallet, watchlist_id=watchlist_id)
+    counts = {name: 0 for name in ("excellent", "good", "usable", "weak", "stale", "missing")}
+    enriched = 0
+    written = 0
+
+    for fill in fills:
+        before = _book_before(session, fill.token_id, int(fill.trade_ts))
+        after = _book_after(session, fill.token_id, int(fill.trade_ts), max_age_s=max_age_s)
+        params = _params(fill, before, after, max_age_s=max_age_s)
+        counts[params["context_status"]] += 1
+        if params["role"] is not None:
+            enriched += 1
+        session.execute(
+            text(
+                "INSERT INTO all_fill_context "
+                "(event_id, wallet, token_id, condition_id, trade_ts, trade_utc, side, "
+                "fill_price, fill_size, fill_shares, fill_notional_usdc, delta_usdc, role, "
+                "book_before_ts, book_before_age_s, best_bid_before, best_ask_before, "
+                "spread_before, mid_before, depth_top_before_json, book_after_ts, "
+                "book_after_age_s, best_bid_after, best_ask_after, spread_after, "
+                "mid_after, depth_top_after_json, context_status, null_reason, "
+                "created_at, updated_at) "
+                "VALUES (:event_id, :wallet, :token_id, :condition_id, :trade_ts, "
+                ":trade_utc, :side, :fill_price, :fill_size, :fill_shares, "
+                ":fill_notional_usdc, :delta_usdc, :role, :book_before_ts, "
+                ":book_before_age_s, :best_bid_before, :best_ask_before, "
+                ":spread_before, :mid_before, :depth_top_before_json, :book_after_ts, "
+                ":book_after_age_s, :best_bid_after, :best_ask_after, :spread_after, "
+                ":mid_after, :depth_top_after_json, :context_status, :null_reason, "
+                ":created_at, :updated_at) "
+                "ON CONFLICT(event_id) DO UPDATE SET "
+                "fill_shares = excluded.fill_shares, "
+                "fill_notional_usdc = excluded.fill_notional_usdc, "
+                "role = excluded.role, "
+                "book_before_ts = excluded.book_before_ts, "
+                "book_before_age_s = excluded.book_before_age_s, "
+                "best_bid_before = excluded.best_bid_before, "
+                "best_ask_before = excluded.best_ask_before, "
+                "spread_before = excluded.spread_before, "
+                "mid_before = excluded.mid_before, "
+                "depth_top_before_json = excluded.depth_top_before_json, "
+                "book_after_ts = excluded.book_after_ts, "
+                "book_after_age_s = excluded.book_after_age_s, "
+                "best_bid_after = excluded.best_bid_after, "
+                "best_ask_after = excluded.best_ask_after, "
+                "spread_after = excluded.spread_after, "
+                "mid_after = excluded.mid_after, "
+                "depth_top_after_json = excluded.depth_top_after_json, "
+                "context_status = excluded.context_status, "
+                "null_reason = excluded.null_reason, "
+                "updated_at = excluded.updated_at"
+            ),
+            params,
+        )
+        written += 1
+    session.commit()
+    return AllFillContextStats(
+        fills_seen=len(fills),
+        contexts_written=written,
+        enriched=enriched,
+        unenriched=len(fills) - enriched,
         excellent=counts["excellent"],
         good=counts["good"],
         usable=counts["usable"],

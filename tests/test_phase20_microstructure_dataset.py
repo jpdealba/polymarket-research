@@ -8,7 +8,7 @@ from click.testing import CliRunner
 from sqlalchemy import text
 
 from pmresearch.cli import main
-from pmresearch.context.maker_fills import build_maker_fill_context
+from pmresearch.context.maker_fills import build_all_fill_context, build_maker_fill_context
 from pmresearch.microstructure.dataset import (
     build_microstructure_dataset,
     dataset_stats,
@@ -188,6 +188,7 @@ def _setup_buy(session, *, condition_id="cond1", token0="tok0", token1="tok1", r
     )
     _seed_fill_enrichment(session, event_id=buy_id)
     _seed_snapshot(session, token_id=token0, ts=995)
+    build_all_fill_context(session, wallet=WALLET, watchlist="world_cup_2026", max_age_s=60)
     build_maker_fill_context(session, wallet=WALLET, watchlist="world_cup_2026", max_age_s=60)
     return buy_id
 
@@ -250,6 +251,39 @@ def test_missing_book_depth_is_flagged(session):
     assert row["bid_depth_top1"] is None
     reasons = json.loads(row["null_reasons_json"])
     assert reasons["bid_depth_top1"] == "no_book_depth"
+
+
+def test_all_fills_source_includes_unenriched_role_unknown_and_explicit_sizes(session):
+    _seed_market(session)
+    add_manual_token(session, name="world_cup_2026", token_id="tok0")
+    buy_id = _seed_trade(
+        session,
+        wallet=WALLET,
+        token_id="tok0",
+        condition_id="cond1",
+        ts=1000,
+        side="BUY",
+        shares=10,
+        price="0.40",
+    )
+    _seed_snapshot(session, token_id="tok0", ts=995)
+    build_all_fill_context(session, wallet=WALLET, watchlist="world_cup_2026", max_age_s=60)
+    rebuild_episodes(session, WALLET)
+
+    stats = build_microstructure_dataset(
+        session,
+        wallet=WALLET,
+        watchlist="world_cup_2026",
+        context_source="all_fills",
+    )
+
+    assert stats.context_source == "all_fills"
+    assert stats.rows_written == 1
+    row = _fetch_row(session, buy_id)
+    assert row["role"] == "UNKNOWN"
+    assert row["context_source"] == "all_fills"
+    assert Decimal(row["fill_shares"]) == Decimal("10")
+    assert Decimal(row["fill_notional_usdc"]) == Decimal("4.00")
 
 
 def test_dataset_stats(session):

@@ -9,6 +9,7 @@ from sqlalchemy import text
 from pmresearch.ingest.enrichment import (
     enrichment_coverage,
     join_fills,
+    max_rpc_watermark,
     run_enrichment,
 )
 from pmresearch.sources.rpc import (
@@ -722,6 +723,16 @@ def _set_rpc_watermark(session, wallet, block):
     session.commit()
 
 
+def test_max_rpc_watermark_across_wallets(settings, session):
+    _set_rpc_watermark(session, "0xaaa", 100)
+    _set_rpc_watermark(session, "0xbbb", 250)
+
+    assert max_rpc_watermark(session, ["0xaaa", "0xbbb"]) == 250
+    assert max_rpc_watermark(session, ["0xaaa"]) == 100
+    assert max_rpc_watermark(session, ["0xccc"]) == 0
+    assert max_rpc_watermark(session, []) == 0
+
+
 def test_rpc_chunked_driver_enriches_and_advances_watermark(settings, session):
     wallet, other = "0xaaa", "0xbbb"
     id1 = _seed_trade(session, wallet, tx="0xt1", token="1", delta_shares="10", key="a")
@@ -990,6 +1001,35 @@ def test_polygonscan_fetch_pages_filters_wallet_and_raw_stores(settings, session
         text("SELECT COUNT(*) FROM raw_fetches WHERE source = 'polygonscan'")
     ).scalar()
     assert raw_count == (len(EXCHANGE_CONTRACTS) * 2) + 3
+
+
+def test_get_block_number_retries_below_floor():
+    # First attempt's two reads both land on stale nodes (min=100), below
+    # the floor of 150 — should retry rather than returning the stale value.
+    # Second attempt clears the floor (min=160).
+    responses = iter([100, 100, 160, 170])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "1", "message": "OK", "result": hex(next(responses))})
+
+    client = httpx.Client(base_url="https://api.etherscan.io", transport=httpx.MockTransport(handler))
+    sleeps: list[float] = []
+    source = PolygonscanSource("key", client=client, sleep_fn=sleeps.append)
+
+    assert source.get_block_number(floor=150) == 160
+    assert sleeps == [1.0]
+
+
+def test_get_block_number_gives_up_after_max_attempts():
+    # Every attempt stays below the floor — after exhausting retries, return
+    # the best (highest) minimum seen rather than looping forever.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "1", "message": "OK", "result": hex(50)})
+
+    client = httpx.Client(base_url="https://api.etherscan.io", transport=httpx.MockTransport(handler))
+    source = PolygonscanSource("key", client=client, sleep_fn=lambda s: None)
+
+    assert source.get_block_number(floor=1000, max_attempts=3) == 50
 
 
 def test_find_block_by_timestamp_binary_search():

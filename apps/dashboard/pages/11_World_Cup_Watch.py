@@ -39,6 +39,7 @@ with api.open_session(settings) as session:
     )
     maker_fills = []
     taker_fills = []
+    all_fills = []
 
 if not status.tables_exist:
     st.info("World Cup Watch tables are not available yet. Run `pmr db upgrade`.")
@@ -82,6 +83,14 @@ wallet_view_options = tracked_wallets or [row.address for row in wallet_rows]
 if wallet_view_options:
     with api.open_session(settings) as session:
         for w in wallet_view_options:
+            wallet_all_fills = api.worldcup_recent_all_fills(
+                session,
+                wallet=w,
+                watchlist=settings.worldcup_watchlist_name,
+                limit=100,
+            )
+            for row in wallet_all_fills:
+                all_fills.append((w, row))
             for role, bucket in (("maker", maker_fills), ("taker", taker_fills)):
                 wallet_fills = api.worldcup_recent_maker_fills(
                     session,
@@ -92,6 +101,7 @@ if wallet_view_options:
                 )
                 for row in wallet_fills:
                     bucket.append((w, row))
+    all_fills.sort(key=lambda pair: (pair[1].trade_ts, pair[1].event_id), reverse=True)
     maker_fills.sort(key=lambda pair: (pair[1].trade_ts, pair[1].event_id), reverse=True)
     taker_fills.sort(key=lambda pair: (pair[1].trade_ts, pair[1].event_id), reverse=True)
 
@@ -239,7 +249,8 @@ def _fill_rows(pairs, wallet):
             "role": row.role,
             "side": row.side,
             "fill_price": row.fill_price,
-            "fill_size": row.fill_size,
+            "fill_shares": row.fill_shares,
+            "fill_notional_usdc": row.fill_notional_usdc,
             "bid_before": row.best_bid_before,
             "ask_before": row.best_ask_before,
             "spread_before": row.spread_before,
@@ -257,7 +268,7 @@ def _fill_rows(pairs, wallet):
 
 st.header("Per-Wallet Fills and Coverage")
 if st.button("Refresh fills & coverage", key="refresh_fills"):
-    with st.spinner("Rebuilding fill context..."):
+    with st.spinner("Rebuilding all-fill and enriched maker context..."):
         api.run_worldcup_context_cycle(settings)
     st.rerun()
 wallet_columns = st.columns(len(wallet_view_options)) if wallet_view_options else []
@@ -265,23 +276,51 @@ for col, w in zip(wallet_columns, wallet_view_options):
     with col:
         st.subheader(wallet_labels.get(w, w))
         with api.open_session(settings) as session:
+            all_coverage = api.worldcup_all_context_coverage(
+                session,
+                wallet=w,
+                watchlist=settings.worldcup_watchlist_name,
+            )
             w_coverage = api.worldcup_context_coverage(session, wallet=w, role="maker")
+        st.markdown("**All Fills Coverage**")
         q1, q2 = st.columns(2)
-        q1.metric("Maker Fills", w_coverage.total)
-        q2.metric("Stale/Missing", w_coverage.stale + w_coverage.missing)
+        q1.metric("All Fills", all_coverage.total)
+        q2.metric("All Stale/Missing", all_coverage.stale + all_coverage.missing)
         st.caption(
-            f"Strict (excellent+good): {w_coverage.strict_count}/{w_coverage.total} = "
+            f"All fills strict: {all_coverage.strict_count}/{all_coverage.total} = "
+            f"{format_pct(all_coverage.strict_share)}. "
+            f"Loose (+usable): {all_coverage.loose_count}/{all_coverage.total} = "
+            f"{format_pct(all_coverage.loose_share)}."
+        )
+        st.markdown("**Enriched Maker Coverage**")
+        m1, m2 = st.columns(2)
+        m1.metric("Enriched Maker Fills", w_coverage.total)
+        m2.metric("Maker Stale/Missing", w_coverage.stale + w_coverage.missing)
+        st.caption(
+            f"Enriched maker strict: {w_coverage.strict_count}/{w_coverage.total} = "
             f"{format_pct(w_coverage.strict_share)}. "
             f"Loose (+usable): {w_coverage.loose_count}/{w_coverage.total} = "
-            f"{format_pct(w_coverage.loose_share)}."
+            f"{format_pct(w_coverage.loose_share)}. Maker coverage can lag while "
+            "maker/taker enrichment catches up."
         )
-        if w_coverage.total == 0:
-            st.info("No maker-fill context yet.")
+        if all_coverage.total == 0:
+            st.info("No all-fill context yet.")
         elif w_coverage.strict_share < 0.5:
             st.warning("Strict maker-context coverage is low; avoid strategy conclusions from this sample.")
 
+        all_export = _fill_rows(all_fills, w)
         maker_export = _fill_rows(maker_fills, w)
         taker_export = _fill_rows(taker_fills, w)
+        st.markdown("**All Fills**")
+        st.dataframe(all_export, use_container_width=True)
+        st.download_button(
+            "Export all fills (CSV)",
+            data=_to_csv(all_export),
+            file_name=f"worldcup_all_fills_{w[:10]}_{int(time.time())}.csv",
+            mime="text/csv",
+            disabled=not all_export,
+            key=f"dl_all_{w}",
+        )
         st.markdown("**Maker Fills**")
         st.dataframe(maker_export, use_container_width=True)
         st.download_button(

@@ -1,6 +1,12 @@
-# Loads .env into the current session, then starts the collector (pmr run)
-# in the background and the Streamlit dashboard in the foreground.
-# Ctrl+C stops the dashboard and the background collector together.
+# Loads .env into the current session, then starts the Streamlit dashboard
+# in the background (logged to file) and the collector (pmr run) in the
+# foreground, so its output is what you see live in this terminal.
+#
+# Running the collector as the actual foreground console process (rather
+# than via Start-Process -NoNewWindow) means Ctrl+C hits it directly and
+# reliably, instead of depending on a `finally` block that Windows doesn't
+# always run on a console break. `taskkill /T` on the way out kills each
+# tool's stub-exe + worker-child pair as one unit, so nothing is left behind.
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -22,25 +28,35 @@ Get-Content $envFile | ForEach-Object {
 
 Write-Host "Variables de .env cargadas en esta sesion." -ForegroundColor Green
 
-$pmrExe = Join-Path $repoRoot ".venv\Scripts\pmr.exe"
-$collectorLog = Join-Path $repoRoot "collector.log"
-$collectorErrLog = Join-Path $repoRoot "collector.err.log"
-
-$collector = Start-Process -FilePath $pmrExe -ArgumentList "run" `
-    -NoNewWindow -PassThru `
-    -RedirectStandardOutput $collectorLog `
-    -RedirectStandardError $collectorErrLog
-
-Write-Host "Collector (pmr run) arrancado en background, PID $($collector.Id). Logs: $collectorLog" -ForegroundColor Green
-
 $streamlitExe = Join-Path $repoRoot ".venv\Scripts\streamlit.exe"
+$dashboardLog = Join-Path $repoRoot "dashboard.log"
+$dashboardErrLog = Join-Path $repoRoot "dashboard.err.log"
+
+$dashboard = Start-Process -FilePath $streamlitExe `
+    -ArgumentList "run", "$repoRoot\apps\dashboard\Home.py" `
+    -NoNewWindow -PassThru `
+    -RedirectStandardOutput $dashboardLog `
+    -RedirectStandardError $dashboardErrLog
+
+Write-Host "Dashboard (streamlit) arrancado en background, PID $($dashboard.Id). Logs: $dashboardLog" -ForegroundColor Green
+
+$pmrExe = Join-Path $repoRoot ".venv\Scripts\pmr.exe"
+
+function Stop-Dashboard {
+    if (-not $dashboard.HasExited) {
+        Write-Host "Deteniendo dashboard (PID $($dashboard.Id))..." -ForegroundColor Yellow
+        taskkill /PID $dashboard.Id /T /F | Out-Null
+    }
+}
+
+trap {
+    Stop-Dashboard
+    break
+}
 
 try {
-    & $streamlitExe run "$repoRoot\apps\dashboard\Home.py"
+    & $pmrExe run
 }
 finally {
-    if (-not $collector.HasExited) {
-        Write-Host "Deteniendo collector (PID $($collector.Id))..." -ForegroundColor Yellow
-        Stop-Process -Id $collector.Id -Force
-    }
+    Stop-Dashboard
 }
