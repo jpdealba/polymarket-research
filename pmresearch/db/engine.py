@@ -19,6 +19,14 @@ def get_engine(settings: Settings) -> Engine:
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA busy_timeout=30000")
+        # NORMAL is crash-safe under WAL (only risks the last txn on power loss)
+        # and cuts the fsync/write-lock duration that was starving the
+        # high-frequency book sampler and stalling enrichment.
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        # Memory-mapped reads and a larger page cache: the DB is multi-GB and
+        # read-heavy (book/context/reconcile projections), default cache is 2MB.
+        cursor.execute("PRAGMA mmap_size=536870912")  # 512 MiB
+        cursor.execute("PRAGMA cache_size=-262144")  # 256 MiB (negative = KiB)
         cursor.close()
 
     return engine
