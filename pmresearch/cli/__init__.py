@@ -29,6 +29,7 @@ from .sync import sync_group
 from .wallets import wallet_group
 from .books import books_group
 from .acceptance import acceptance
+from .cluster import cluster_group
 from .context import context_group
 from .watchlist import watchlist_group
 from .worldcup import worldcup_group
@@ -64,6 +65,7 @@ main.add_command(context_group)
 main.add_command(watchlist_group)
 main.add_command(worldcup_group)
 main.add_command(evidence_group)
+main.add_command(cluster_group)
 replay_group.add_command(replay_episodes)
 
 
