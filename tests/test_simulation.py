@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -14,6 +15,27 @@ from pmresearch.simulation.attribution import (
     fetch_attribution_summary,
     fetch_event_attribution,
     fetch_market_attribution,
+)
+from pmresearch.simulation.composite_search import (
+    COMPONENT_CONTRIBUTION_FILENAME,
+    COMPONENT_EFFECTIVENESS_FILENAME,
+    COMPONENT_EFFECTIVENESS_REPORT_FILENAME,
+    COMPOSITE_CANDIDATES_FILENAME,
+    COMPOSITE_REPORT_FILENAME,
+    COMPOSITE_TOP_FILENAME,
+    EVENT_ROBUSTNESS_FILENAME,
+    FORWARD_WATCH_FILENAME,
+    PER_CANDIDATE_EVENT_PNL_FILENAME,
+    SKIPPED_BY_COMPONENT_FILENAME,
+    ComponentSpec,
+    CompositeCandidate,
+    CompositeMetric,
+    _edge_bands,
+    _final_status,
+    _rank_candidates,
+    _simulate_composite,
+    run_progressive_composite_search,
+    write_composite_outputs,
 )
 from pmresearch.simulation.engine import (
     DECISION_CONTEXT_FIELDS,
@@ -33,6 +55,14 @@ from pmresearch.simulation.holdout_failure import (
     TIME_BUCKET_FILENAME,
     generate_holdout_failure_diagnostics,
     write_holdout_failure_outputs,
+)
+from pmresearch.simulation.inventory_cycling import (
+    InventoryCyclingConfig,
+    InventoryLifecycleState,
+    fetch_lifecycle_summary,
+    merge_qty_for_condition,
+    simulate_inventory_cycling,
+    simulate_redeem,
 )
 from pmresearch.simulation.report import generate_compare_report, generate_sim_report
 from pmresearch.simulation.risk import RiskLimits
@@ -1201,6 +1231,489 @@ def test_holdout_failure_does_not_change_selected_candidate(session):
         text("SELECT selected_candidate_id FROM simulation_strategy_search_runs")
     ).scalar_one()
     assert after == before
+
+
+def test_composite_search_writes_required_outputs(session, tmp_path):
+    rows = [
+        _make_row(
+            i,
+            RN1_WALLET,
+            trade_ts=1_000_000 + i * 10,
+            best_bid_before="0.30",
+            best_ask_before="0.50",
+            mid_before="0.50",
+            condition_id=f"cond_{i // 3}",
+            token_id=f"tok_{i}",
+        )
+        for i in range(30)
+    ]
+    _insert_dataset_rows(session, RN1_WALLET, rows)
+
+    result = run_progressive_composite_search(
+        session,
+        max_components=2,
+        max_candidates=8,
+        seed=2204,
+        capital_mode="small",
+        max_capital=Decimal("100"),
+        max_order_size=Decimal("5"),
+        min_events=1,
+        min_fills=1,
+        wallet=RN1_WALLET,
+    )
+    write_composite_outputs(result, tmp_path)
+
+    for filename in (
+        COMPOSITE_REPORT_FILENAME,
+        COMPOSITE_CANDIDATES_FILENAME,
+        COMPOSITE_TOP_FILENAME,
+        FORWARD_WATCH_FILENAME,
+        COMPONENT_EFFECTIVENESS_REPORT_FILENAME,
+        COMPONENT_EFFECTIVENESS_FILENAME,
+        PER_CANDIDATE_EVENT_PNL_FILENAME,
+        SKIPPED_BY_COMPONENT_FILENAME,
+        COMPONENT_CONTRIBUTION_FILENAME,
+        EVENT_ROBUSTNESS_FILENAME,
+    ):
+        assert (tmp_path / filename).exists()
+    report = (tmp_path / COMPOSITE_REPORT_FILENAME).read_text(encoding="utf-8")
+    assert "Progressive Composite Strategy Search" in report
+    assert "RN1 similarity score" in report or "No candidate passed" in report
+    candidates_csv = (tmp_path / COMPOSITE_CANDIDATES_FILENAME).read_text(encoding="utf-8")
+    assert "selected_components" in candidates_csv
+    assert "final_status" in candidates_csv
+
+
+def test_composite_search_no_leakage_from_forbidden_columns(session):
+    rows = [
+        _make_row(
+            i,
+            RN1_WALLET,
+            trade_ts=1_000_000 + i * 10,
+            best_bid_before="0.30",
+            best_ask_before="0.50",
+            mid_before="0.50",
+            condition_id=f"cond_{i // 3}",
+            token_id=f"tok_{i}",
+        )
+        for i in range(30)
+    ]
+    _insert_dataset_rows(session, RN1_WALLET, rows)
+
+    before = run_progressive_composite_search(
+        session,
+        max_components=1,
+        max_candidates=5,
+        seed=2204,
+        capital_mode="small",
+        max_capital=Decimal("100"),
+        max_order_size=Decimal("5"),
+        min_events=1,
+        min_fills=1,
+        wallet=RN1_WALLET,
+    )
+    before_metrics = [
+        (
+            candidate.component_labels,
+            candidate.metrics["validation"].candidate_signals_count,
+            candidate.metrics["validation"].accepted_orders_count,
+            candidate.metrics["validation"].simulated_fills_count,
+            candidate.metrics["validation"].net_pnl,
+            candidate.final_status,
+        )
+        for candidate in before.candidates
+    ]
+    session.execute(
+        text(
+            "UPDATE microstructure_lifecycle_dataset "
+            "SET fill_price = '0.01', fill_size = '1', realized_pnl_wac = '-9999', "
+            "markout_5m = '-999', markout_1h = '-999', pnl_at_resolution = '-9999', "
+            "close_path = 'LEAK_SENTINEL', book_after_age_s = 999 "
+            "WHERE wallet = :wallet"
+        ),
+        {"wallet": RN1_WALLET},
+    )
+    session.commit()
+
+    after = run_progressive_composite_search(
+        session,
+        max_components=1,
+        max_candidates=5,
+        seed=2204,
+        capital_mode="small",
+        max_capital=Decimal("100"),
+        max_order_size=Decimal("5"),
+        min_events=1,
+        min_fills=1,
+        wallet=RN1_WALLET,
+    )
+    after_metrics = [
+        (
+            candidate.component_labels,
+            candidate.metrics["validation"].candidate_signals_count,
+            candidate.metrics["validation"].accepted_orders_count,
+            candidate.metrics["validation"].simulated_fills_count,
+            candidate.metrics["validation"].net_pnl,
+            candidate.final_status,
+        )
+        for candidate in after.candidates
+    ]
+
+    assert after_metrics == before_metrics
+
+
+def test_composite_low_positive_test_is_forward_watch_not_hard_fail():
+    candidate = _composite_candidate(test_net_pnl="6.24", test_roi="0.025", validation_net_pnl="109.01")
+
+    status = _classify_composite(candidate, max_capital=Decimal("250"))
+
+    assert status == "FORWARD_WATCH_CANDIDATE"
+
+
+def test_composite_material_negative_test_is_hard_fail():
+    candidate = _composite_candidate(test_net_pnl="-8.00", test_roi="-0.04", validation_net_pnl="40")
+
+    status = _classify_composite(candidate, max_capital=Decimal("250"))
+
+    assert status == "TEST_FAIL_HARD"
+
+
+def test_composite_near_breakeven_test_is_weak_or_forward_watch():
+    candidate = _composite_candidate(test_net_pnl="0.50", test_roi="0.002", validation_net_pnl="25")
+
+    status = _classify_composite(candidate, max_capital=Decimal("250"))
+
+    assert status in {"WEAK_RESEARCH_CANDIDATE", "FORWARD_WATCH_CANDIDATE"}
+    assert status == "WEAK_RESEARCH_CANDIDATE"
+
+
+def test_composite_test_metrics_do_not_change_rank_or_selected():
+    first = _composite_candidate(1, validation_net_pnl="30", validation_roi="0.30", test_net_pnl="-50")
+    second = _composite_candidate(2, validation_net_pnl="20", validation_roi="0.20", test_net_pnl="100")
+    first.final_status = _classify_composite(first, max_capital=Decimal("250"))
+    second.final_status = _classify_composite(second, max_capital=Decimal("250"))
+
+    before = _rank_candidates([second, first], min_events=1, min_fills=1)
+    first.metrics["test"] = replace(first.metrics["test"], net_pnl=Decimal("500"), roi_on_capital=Decimal("2"))
+    second.metrics["test"] = replace(second.metrics["test"], net_pnl=Decimal("-500"), roi_on_capital=Decimal("-2"))
+    after = _rank_candidates([second, first], min_events=1, min_fills=1)
+
+    assert [c.candidate_id for c in before] == [1, 2]
+    assert [c.candidate_id for c in after] == [1, 2]
+    assert before[0].candidate_id == after[0].candidate_id
+
+
+def test_composite_edge_bands_are_based_on_max_capital():
+    bands = _edge_bands(Decimal("250"))
+
+    assert bands == {
+        "1pct": Decimal("2.50"),
+        "2pct": Decimal("5.00"),
+        "3pct": Decimal("7.50"),
+        "5pct": Decimal("12.50"),
+    }
+
+
+def test_inventory_cycling_merge_qty_is_min_of_binary_legs():
+    state = InventoryLifecycleState()
+    state.apply_buy("cond_merge", "tok0", Decimal("0.40"), Decimal("7"))
+    state.apply_buy("cond_merge", "tok1", Decimal("0.50"), Decimal("3"))
+
+    assert merge_qty_for_condition(state, "cond_merge") == Decimal("3")
+
+
+def test_inventory_cycling_merge_releases_capital_and_reduces_unpaired():
+    state = InventoryLifecycleState()
+    state.apply_buy("cond_merge", "tok0", Decimal("0.40"), Decimal("7"))
+    state.apply_buy("cond_merge", "tok1", Decimal("0.50"), Decimal("3"))
+    locked_before = state.locked_capital
+    unpaired_before = state.unpaired_inventory("cond_merge")
+
+    proceeds, _merge_pnl, _before, after = state.merge("cond_merge", Decimal("3"))
+
+    assert proceeds == Decimal("3")
+    assert state.released_credit == Decimal("3")
+    assert state.locked_capital < locked_before
+    assert state.unpaired_inventory("cond_merge") < unpaired_before
+    assert after == {"tok0": "4"}
+
+
+def test_inventory_cycling_recycled_capital_allows_new_orders():
+    state = InventoryLifecycleState()
+    config = InventoryCyclingConfig(max_capital=Decimal("5"), recycle_capital_enabled=True)
+    state.apply_buy("cond_a", "tok0", Decimal("0.50"), Decimal("5"))
+    state.apply_buy("cond_a", "tok1", Decimal("0.50"), Decimal("5"))
+    available_before_merge = state.available_capital(config)
+
+    state.merge("cond_a", Decimal("5"))
+
+    assert available_before_merge < Decimal("5")
+    assert state.available_capital(config) >= Decimal("5")
+
+
+def test_inventory_cycling_redeem_values_winner_and_loser():
+    state = InventoryLifecycleState()
+    state.apply_buy("cond_res", "winner", Decimal("0.20"), Decimal("2"))
+    state.apply_buy("cond_res", "loser", Decimal("0.10"), Decimal("1"))
+
+    events, metrics = simulate_redeem(
+        state,
+        {"cond_res": {"winner": Decimal("1"), "loser": Decimal("0")}},
+        ts=123,
+    )
+
+    assert len(events) == 2
+    assert metrics.redeem_count == 2
+    assert metrics.redeem_pnl > Decimal("0")
+    assert state.lot("cond_res", "winner").qty == Decimal("0")
+    assert state.lot("cond_res", "loser").qty == Decimal("0")
+
+
+def test_inventory_cycling_auto_merge_disabled_leaves_inventory_unmerged():
+    rows = [
+        _make_row(1, RN1_WALLET, trade_ts=1_000_000, condition_id="cond_no_merge", token_id="tok0"),
+        _make_row(2, RN1_WALLET, trade_ts=1_000_010, condition_id="cond_no_merge", token_id="tok1"),
+    ]
+
+    result = simulate_inventory_cycling(
+        rows,
+        CONSERVATIVE,
+        RiskLimits(max_capital_deployed=Decimal("100"), max_order_size=Decimal("10")),
+        config=InventoryCyclingConfig(auto_merge_enabled=False, max_capital=Decimal("100")),
+        resolution_prices={},
+    )
+
+    lifecycle = result.lifecycle_metrics
+    assert lifecycle.merge_count == 0
+    assert lifecycle.unresolved_inventory_value > Decimal("0")
+
+
+def test_event_inventory_cycling_strategy_run_creates_merge(settings, monkeypatch, session):
+    monkeypatch.setenv("PMR_DATA_DIR", str(settings.data_dir))
+    rows = [
+        _make_row(i, RN1_WALLET, trade_ts=1_000_000 + i * 10, condition_id="cond_cycle", token_id=f"tok{i % 2}")
+        for i in range(10)
+    ]
+    _insert_dataset_rows(session, RN1_WALLET, rows)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "sim",
+            "run",
+            "--wallet",
+            RN1_WALLET,
+            "--strategy",
+            "event_inventory_cycling_v1",
+            "--scenario",
+            "conservative",
+            "--max-capital",
+            "100",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "strategy=event_inventory_cycling_v1" in result.output
+    assert "lifecycle merge_count=" in result.output
+    run_id = int(result.output.split("run_id=")[1].split()[0])
+    summary = fetch_lifecycle_summary(session, run_id)
+    assert summary is not None
+    assert summary.merge_count > 0
+    assert summary.released_capital_total > Decimal("0")
+
+
+def test_event_inventory_cycling_resolution_changes_do_not_change_entry_decisions(session):
+    rows = [
+        _make_row(1, RN1_WALLET, trade_ts=1_000_000, condition_id="cond_leak_res", token_id="tok0"),
+        _make_row(2, RN1_WALLET, trade_ts=1_000_010, condition_id="cond_leak_res", token_id="tok1"),
+        _make_row(3, RN1_WALLET, trade_ts=1_000_020, condition_id="cond_leak_res", token_id="tok0"),
+    ]
+    _insert_dataset_rows(session, RN1_WALLET, rows)
+    _insert_market_metadata(
+        session,
+        condition_id="cond_leak_res",
+        question="Leakage Resolution Market",
+        event_id="event-leak-res",
+        event_title="Leakage Event",
+    )
+    session.execute(
+        text(
+            "UPDATE markets SET resolution_prices_json = :prices "
+            "WHERE condition_id = 'cond_leak_res'"
+        ),
+        {"prices": json.dumps({"tok0": "1", "tok1": "0"})},
+    )
+    session.commit()
+
+    before = run_strategy_simulation(session, RN1_WALLET, "event_inventory_cycling_v1", "conservative")
+    before_orders = _orders_for_run(session, before.run_id)
+    session.execute(
+        text(
+            "UPDATE markets SET resolution_prices_json = :prices "
+            "WHERE condition_id = 'cond_leak_res'"
+        ),
+        {"prices": json.dumps({"tok0": "0", "tok1": "1"})},
+    )
+    session.commit()
+
+    after = run_strategy_simulation(session, RN1_WALLET, "event_inventory_cycling_v1", "conservative")
+    after_orders = _orders_for_run(session, after.run_id)
+
+    assert after_orders == before_orders
+
+
+def test_event_inventory_cycling_participates_in_composite_search(session):
+    rows = [
+        _make_row(i, RN1_WALLET, trade_ts=1_000_000 + i * 10, condition_id=f"cond_inv_{i // 2}", token_id=f"tok_{i % 2}")
+        for i in range(12)
+    ]
+    _insert_dataset_rows(session, RN1_WALLET, rows)
+
+    result = run_progressive_composite_search(
+        session,
+        max_components=1,
+        max_candidates=3,
+        seed=2204,
+        capital_mode="small",
+        max_capital=Decimal("100"),
+        max_order_size=Decimal("5"),
+        min_events=1,
+        min_fills=1,
+        wallet=RN1_WALLET,
+        strategy_family="event_inventory_cycling",
+    )
+
+    assert result.candidates
+    assert result.candidates[0].components[0].name == "event_inventory_cycling_v1"
+
+
+def test_composite_impossible_filter_reduces_inventory_orders_and_fills_to_zero():
+    rows = [
+        _make_row(i, RN1_WALLET, trade_ts=1_000_000 + i * 10, condition_id="cond_guard", token_id=f"tok{i % 2}")
+        for i in range(10)
+    ]
+    base = ComponentSpec(
+        "event_inventory_cycling_v1",
+        "event_inventory_cycling",
+        "base",
+        {
+            "max_bond_cost": "0.98",
+            "min_bond_delta": "0",
+            "max_unpaired_inventory": "100",
+            "min_merge_qty": "1",
+            "auto_merge_enabled": True,
+            "recycle_capital_enabled": True,
+        },
+    )
+    impossible = ComponentSpec(
+        "price_bucket_filters",
+        "price_bucket_filters",
+        "filter",
+        {"min_mid": "2.00", "max_mid": "3.00"},
+    )
+
+    result = _simulate_composite(
+        rows,
+        (base, impossible),
+        CONSERVATIVE,
+        RiskLimits(max_capital_deployed=Decimal("100"), max_order_size=Decimal("10")),
+        split_name="validation",
+    )
+    metric = result.metric
+
+    assert metric.accepted_orders_count == 0
+    assert metric.simulated_fills_count == 0
+    assert metric.skipped_orders_count > 0
+    assert metric.skipped_by_reason["component:price_bucket_filters"] > 0
+
+
+def _classify_composite(candidate: CompositeCandidate, *, max_capital: Decimal) -> str:
+    candidate.final_status = _final_status(
+        candidate,
+        ordering_violation=False,
+        max_capital=max_capital,
+        capital_mode="small",
+        min_events=1,
+        min_fills=1,
+    )
+    return candidate.final_status
+
+
+def _composite_candidate(
+    candidate_id: int = 1,
+    *,
+    train_net_pnl: str = "30",
+    validation_net_pnl: str = "25",
+    test_net_pnl: str = "5",
+    train_roi: str = "0.30",
+    validation_roi: str = "0.25",
+    test_roi: str = "0.02",
+) -> CompositeCandidate:
+    metrics = {
+        "train": _composite_metric("train", net_pnl=train_net_pnl, roi=train_roi),
+        "validation": _composite_metric("validation", net_pnl=validation_net_pnl, roi=validation_roi),
+        "test": _composite_metric("test", net_pnl=test_net_pnl, roi=test_roi),
+    }
+    candidate = CompositeCandidate(
+        candidate_id=candidate_id,
+        stage=1,
+        components=(
+            ComponentSpec(
+                "completion_set_edge",
+                "completion_set_edge",
+                "base",
+                {"max_bond_cost": "0.98"},
+            ),
+        ),
+        metrics=metrics,
+        validation_score=metrics["validation"].score,
+        rn1_similarity_score=Decimal("0.50"),
+        gap_similarity_score=Decimal("0"),
+    )
+    return candidate
+
+
+def _composite_metric(
+    split_name: str,
+    *,
+    net_pnl: str,
+    roi: str,
+    risk_breaches: int = 0,
+    fills: int = 10,
+    events: int = 3,
+) -> CompositeMetric:
+    pnl = Decimal(net_pnl)
+    roi_d = Decimal(roi)
+    return CompositeMetric(
+        split_name=split_name,
+        candidate_signals_count=fills,
+        accepted_orders_count=fills,
+        skipped_orders_count=0,
+        simulated_fills_count=fills,
+        events_count=events,
+        fill_rate_on_candidates=Decimal("1"),
+        net_pnl=pnl,
+        roi_on_capital=roi_d,
+        max_drawdown=Decimal("1"),
+        max_event_loss=Decimal("1"),
+        capital_required=Decimal("100"),
+        turnover=Decimal("100"),
+        capital_recycling=Decimal("1"),
+        risk_breaches=risk_breaches,
+        risk_prevented_count=0,
+        concentration=Decimal("0.20"),
+        score=roi_d,
+        event_rows=(
+            {
+                "split_name": split_name,
+                "event_id": "event_a",
+                "total_pnl": str(pnl),
+                "fills_count": fills,
+                "turnover": "100",
+                "max_event_exposure": "10",
+            },
+        ),
+    )
 
 
 def _search_candidate(

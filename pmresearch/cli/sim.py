@@ -14,6 +14,20 @@ from ..simulation.attribution import (
     fetch_market_attribution,
     generate_attribution_report,
 )
+from ..simulation.composite_search import (
+    COMPONENT_CONTRIBUTION_FILENAME,
+    COMPONENT_EFFECTIVENESS_FILENAME,
+    COMPONENT_EFFECTIVENESS_REPORT_FILENAME,
+    COMPOSITE_CANDIDATES_FILENAME,
+    COMPOSITE_REPORT_FILENAME,
+    COMPOSITE_TOP_FILENAME,
+    EVENT_ROBUSTNESS_FILENAME,
+    FORWARD_WATCH_FILENAME,
+    PER_CANDIDATE_EVENT_PNL_FILENAME,
+    SKIPPED_BY_COMPONENT_FILENAME,
+    run_progressive_composite_search,
+    write_composite_outputs,
+)
 from ..simulation.engine import run_simulation, run_strategy_simulation
 from ..simulation.holdout_failure import (
     BOOK_AGE_FILENAME,
@@ -24,6 +38,7 @@ from ..simulation.holdout_failure import (
     TIME_BUCKET_FILENAME,
     write_holdout_failure_outputs,
 )
+from ..simulation.inventory_cycling import fetch_lifecycle_summary
 from ..simulation.report import generate_compare_report
 from ..simulation.risk import RiskLimits
 from ..simulation.search import (
@@ -118,6 +133,27 @@ def sim_run(
         f"risk_prevented={result.risk_prevented_count} "
         f"stale_excluded={result.stale_context_excluded}"
     )
+    session = get_session_factory(settings)()
+    try:
+        lifecycle = fetch_lifecycle_summary(session, result.run_id)
+    finally:
+        session.close()
+    if lifecycle is not None:
+        click.echo(
+            f"  lifecycle merge_count={lifecycle.merge_count} merged_qty={lifecycle.merged_qty} "
+            f"released_capital_total={_fmt_usdc(lifecycle.released_capital_total)} "
+            f"capital_recycled_total={_fmt_usdc(lifecycle.capital_recycled_total)}"
+        )
+        click.echo(
+            f"  lifecycle trading_pnl={_fmt_usdc(lifecycle.trading_pnl)} "
+            f"merge_pnl={_fmt_usdc(lifecycle.merge_pnl)} "
+            f"redeem_pnl={_fmt_usdc(lifecycle.redeem_pnl)} "
+            f"unresolved_inventory_value={_fmt_usdc(lifecycle.unresolved_inventory_value)}"
+        )
+        click.echo(
+            f"  lifecycle max_unpaired_inventory={lifecycle.max_unpaired_inventory} "
+            f"capital_turnover_ratio={_fmt_decimal(lifecycle.capital_turnover_ratio)}"
+        )
     if result.scenario == "conservative":
         gate = "PASS" if result.conservative_pass else "FAIL"
         click.echo(f"  conservative_gate={gate}")
@@ -411,6 +447,124 @@ def sim_holdout_failure(
         BOOK_AGE_FILENAME,
         SIDE_FILENAME,
         TIME_BUCKET_FILENAME,
+    ):
+        click.echo(f"wrote {out_dir / filename}")
+
+
+@sim_group.command("composite-search")
+@click.option("--out-dir", "out_dir", type=click.Path(path_type=Path), required=True)
+@click.option("--wallet", "wallet", default="all", show_default=True, help="Wallet scope or 'all'.")
+@click.option(
+    "--strategy-family",
+    "strategy_family",
+    type=click.Choice(["composite", "event_inventory_cycling"], case_sensitive=False),
+    default="composite",
+    show_default=True,
+)
+@click.option("--max-components", "max_components", type=int, required=True)
+@click.option("--max-candidates", "max_candidates", type=int, required=True)
+@click.option("--seed", "seed", type=int, default=2204, show_default=True)
+@click.option(
+    "--capital-mode",
+    "capital_mode",
+    type=click.Choice(["small", "scaled"], case_sensitive=False),
+    required=True,
+)
+@click.option("--max-capital", "max_capital", type=float, required=True)
+@click.option("--max-order-size", "max_order_size", type=float, required=True)
+@click.option("--min-events", "min_events", type=int, required=True)
+@click.option("--min-fills", "min_fills", type=int, required=True)
+def sim_composite_search(
+    out_dir: Path,
+    wallet: str,
+    strategy_family: str,
+    max_components: int,
+    max_candidates: int,
+    seed: int,
+    capital_mode: str,
+    max_capital: float,
+    max_order_size: float,
+    min_events: int,
+    min_fills: int,
+) -> None:
+    """Run Phase 22.4 progressive composite strategy search."""
+    settings = get_settings()
+    ensure_data_dirs(settings)
+    session = get_session_factory(settings)()
+    last_progress = {"completed": 0, "ts": 0.0}
+
+    def progress(kind: str, completed: int, total: int, stage: int, promoted: int, elapsed_s: float) -> None:
+        should_print = (
+            completed in {0, 1, total}
+            or kind == "promote"
+            or completed - last_progress["completed"] >= 10
+            or elapsed_s - last_progress["ts"] >= 30
+        )
+        if not should_print:
+            return
+        last_progress["completed"] = completed
+        last_progress["ts"] = elapsed_s
+        rate = completed / elapsed_s if elapsed_s > 0 else 0
+        remaining = max(total - completed, 0)
+        eta_s = remaining / rate if rate > 0 else 0
+        click.echo(
+            f"progress phase22.4 {kind} stage={stage} evaluated={completed}/{total} "
+            f"promoted={promoted} elapsed={elapsed_s:.1f}s eta={eta_s:.1f}s",
+            err=True,
+        )
+
+    try:
+        result = run_progressive_composite_search(
+            session,
+            max_components=max_components,
+            max_candidates=max_candidates,
+            seed=seed,
+            capital_mode=capital_mode,
+            max_capital=Decimal(str(max_capital)),
+            max_order_size=Decimal(str(max_order_size)),
+            min_events=min_events,
+            min_fills=min_fills,
+            wallet=wallet,
+            strategy_family=strategy_family,
+            progress_callback=progress,
+        )
+        write_composite_outputs(result, out_dir)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        session.close()
+
+    selected = result.selected_candidate
+    click.echo(
+        f"composite_search evaluated={result.evaluated_candidates}/{result.max_candidates} "
+        f"ranked={len(result.ranked_candidates)} elapsed_ms={result.elapsed_ms}"
+    )
+    if selected is None:
+        click.echo("selected_candidate=none")
+    else:
+        validation = selected.metrics["validation"]
+        test = selected.metrics["test"]
+        click.echo(
+            f"selected_candidate={selected.candidate_id} rank={selected.rank_index} "
+            f"components={selected.component_count} "
+            f"validation_score={_fmt_decimal(selected.validation_score)} "
+            f"validation_net_pnl={_fmt_usdc(validation.net_pnl)} "
+            f"test_net_pnl={_fmt_usdc(test.net_pnl)} "
+            f"rn1_similarity={_fmt_decimal(selected.rn1_similarity_score)} "
+            f"gap_similarity={_fmt_decimal(selected.gap_similarity_score)} "
+            f"final_status={selected.final_status}"
+        )
+    for filename in (
+        COMPOSITE_REPORT_FILENAME,
+        COMPOSITE_CANDIDATES_FILENAME,
+        COMPOSITE_TOP_FILENAME,
+        FORWARD_WATCH_FILENAME,
+        COMPONENT_EFFECTIVENESS_REPORT_FILENAME,
+        COMPONENT_EFFECTIVENESS_FILENAME,
+        PER_CANDIDATE_EVENT_PNL_FILENAME,
+        SKIPPED_BY_COMPONENT_FILENAME,
+        COMPONENT_CONTRIBUTION_FILENAME,
+        EVENT_ROBUSTNESS_FILENAME,
     ):
         click.echo(f"wrote {out_dir / filename}")
 

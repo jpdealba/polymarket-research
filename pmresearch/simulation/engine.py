@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Optional
@@ -122,6 +122,36 @@ SUPPORTED_STRATEGIES: dict[str, StrategyConfig] = {
             "max_event_exposure",
             "max_capital_deployed",
             "max_daily_loss",
+            "max_order_size",
+        ),
+    ),
+    "event_inventory_cycling_v1": StrategyConfig(
+        strategy_name="event_inventory_cycling_v1",
+        wallet="*",
+        base_rule="completion_set_edge",
+        version=1,
+        rule_parameters={
+            "max_bond_cost": "0.98",
+            "min_bond_delta": "0",
+            "max_unpaired_inventory": "100",
+            "min_merge_qty": "1",
+            "auto_merge_enabled": True,
+            "recycle_capital_enabled": True,
+        },
+        filters={
+            "context_quality": ["excellent", "good", "usable"],
+            "max_book_age_s": 30,
+        },
+        execution_policy={
+            "candidate_order_price": "book_before",
+            "risk_gate": "pre_order",
+            "auto_merge": True,
+            "recycle_capital": True,
+        },
+        pre_trade_risk_limits=(
+            "max_position_per_token",
+            "max_event_exposure",
+            "max_capital_deployed",
             "max_order_size",
         ),
     ),
@@ -531,12 +561,34 @@ def run_simulation(
         raise ValueError(f"No microstructure_lifecycle_dataset rows for wallet={wallet}")
 
     t0 = time.monotonic()
-    transient = _simulate(rows, strategy, scenario, effective_limits)
+    if strategy.strategy_name == "event_inventory_cycling_v1":
+        from .inventory_cycling import run_inventory_strategy
+
+        transient = run_inventory_strategy(
+            session,
+            rows,
+            scenario,
+            effective_limits,
+            parameters=_rule_parameters(strategy) | effective_limits.to_dict(),
+        )
+    else:
+        transient = _simulate(rows, strategy, scenario, effective_limits)
     ordering_violation = False
     conservative_pass = False
 
     if scenario.name == "conservative":
-        optimistic = _simulate(rows, strategy, ALL_SCENARIOS["optimistic"], base_limits)
+        if strategy.strategy_name == "event_inventory_cycling_v1":
+            from .inventory_cycling import run_inventory_strategy
+
+            optimistic = run_inventory_strategy(
+                session,
+                rows,
+                ALL_SCENARIOS["optimistic"],
+                base_limits,
+                parameters=_rule_parameters(strategy) | base_limits.to_dict(),
+            )
+        else:
+            optimistic = _simulate(rows, strategy, ALL_SCENARIOS["optimistic"], base_limits)
         ordering_violation = _has_ordering_violation(transient, optimistic)
         conservative_pass = (
             transient.net_pnl > _ZERO
@@ -567,6 +619,10 @@ def run_simulation(
     _insert_inventory(session, run_id, transient.inventory)
     _insert_daily_pnl(session, run_id, transient.daily_pnl)
     _insert_risk_events(session, run_id, transient.risk_events)
+    if strategy.strategy_name == "event_inventory_cycling_v1":
+        from .inventory_cycling import insert_lifecycle_outputs
+
+        insert_lifecycle_outputs(session, run_id, transient)
     insert_run_attribution(session, run_id, transient.market_attribution)
     session.commit()
 
@@ -628,12 +684,34 @@ def run_strategy_simulation(
         raise ValueError(f"No microstructure_lifecycle_dataset rows for wallet={wallet}")
 
     t0 = time.monotonic()
-    transient = _simulate(rows, strategy, scenario, effective_limits)
+    if strategy.strategy_name == "event_inventory_cycling_v1":
+        from .inventory_cycling import run_inventory_strategy
+
+        transient = run_inventory_strategy(
+            session,
+            rows,
+            scenario,
+            effective_limits,
+            parameters=_rule_parameters(strategy) | effective_limits.to_dict(),
+        )
+    else:
+        transient = _simulate(rows, strategy, scenario, effective_limits)
     ordering_violation = False
     conservative_pass = False
 
     if scenario.name == "conservative":
-        optimistic = _simulate(rows, strategy, ALL_SCENARIOS["optimistic"], base_limits)
+        if strategy.strategy_name == "event_inventory_cycling_v1":
+            from .inventory_cycling import run_inventory_strategy
+
+            optimistic = run_inventory_strategy(
+                session,
+                rows,
+                ALL_SCENARIOS["optimistic"],
+                base_limits,
+                parameters=_rule_parameters(strategy) | base_limits.to_dict(),
+            )
+        else:
+            optimistic = _simulate(rows, strategy, ALL_SCENARIOS["optimistic"], base_limits)
         ordering_violation = _has_ordering_violation(transient, optimistic)
         conservative_pass = (
             transient.net_pnl > _ZERO
@@ -663,6 +741,10 @@ def run_strategy_simulation(
     _insert_inventory(session, run_id, transient.inventory)
     _insert_daily_pnl(session, run_id, transient.daily_pnl)
     _insert_risk_events(session, run_id, transient.risk_events)
+    if strategy.strategy_name == "event_inventory_cycling_v1":
+        from .inventory_cycling import insert_lifecycle_outputs
+
+        insert_lifecycle_outputs(session, run_id, transient)
     insert_run_attribution(session, run_id, transient.market_attribution)
     session.commit()
 
@@ -731,6 +813,8 @@ def _validate_supported_strategy(wallet: str, strategy_name: str) -> StrategyCon
             "Unsupported simulation strategy. Supported strategies are "
             f"{', '.join(SUPPORTED_STRATEGIES)}"
         )
+    if strategy.wallet == "*":
+        return replace(strategy, wallet=wallet)
     if wallet != strategy.wallet:
         raise ValueError(f"{strategy.strategy_name} is supported only for wallet {strategy.wallet}")
     return strategy
