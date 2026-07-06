@@ -200,6 +200,19 @@ Todos los comandos aceptan `--help` para ver la ayuda integrada.
 | --- | --- | --- |
 | `pmr acceptance` | ninguno | Verifica los 7 puntos de ADR 0006: reconciliacion, soak uptime, deletion-test, reportes, backups. Pass/fail con evidencia. |
 
+### rules (Fase 21)
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr rules list` | ninguno | Lista las reglas candidatas interpretables disponibles y sus parametros default. |
+| `pmr rules fit` | `--wallet TEXT` (requerido); `--rule TEXT` (opcional, repetible); `--train-ratio FLOAT` (default `0.6`); `--validation-ratio FLOAT` (default `0.2`); `--store` (flag) | Ajusta reglas candidatas con split temporal train/validation/test. Promueve solo si hay senal positiva fuera de muestra. `--store` persiste resultados en `strategy_candidates` y `rule_evaluations`. |
+| `pmr rules evaluate` | `--wallet TEXT` (requerido); `--rule TEXT` (requerido); `--train-ratio FLOAT` (default `0.6`); `--validation-ratio FLOAT` (default `0.2`) | Evalua una regla concreta sobre el dataset microstructure/lifecycle de una wallet y muestra metricas por ventana temporal. |
+| `pmr rules explain-fill` | `--event-id INT` (requerido); `--rule TEXT` (requerido) | Explica si una regla aplica a un fill concreto y que features pre-fill uso. |
+| `pmr rules report` | `--wallet TEXT` (requerido); `--rule TEXT` (requerido); `--out PATH` (requerido); `--train-ratio FLOAT` (default `0.6`); `--validation-ratio FLOAT` (default `0.2`) | Genera un reporte Markdown para una regla evaluada. |
+| `pmr rules report-all` | `--wallet TEXT` (requerido); `--out PATH` (requerido); `--train-ratio FLOAT` (default `0.6`); `--validation-ratio FLOAT` (default `0.2`) | Genera un reporte Markdown consolidado para todas las reglas candidatas. |
+| `pmr rules show` | `--wallet TEXT` (requerido); `--promoted-only` (flag) | Muestra reglas persistidas en `strategy_candidates` para una wallet. |
+| `pmr rules export-explained` | `--wallet TEXT` (requerido); `--rule TEXT` (requerido); `--out PATH` (requerido); `--explained-only` (flag); `--train-ratio FLOAT` (default `0.6`); `--validation-ratio FLOAT` (default `0.2`) | Exporta a CSV los fills explicados/no explicados por una regla, con labels de evaluacion. |
+
 ## Flujos comunes
 
 ```bash
@@ -267,4 +280,11 @@ pmr trust status
 
 # Aceptacion MVP (Fase 17)
 pmr acceptance
+
+# Reconstruccion de reglas interpretables (Fase 21)
+pmr rules list
+pmr rules fit --wallet 0x... --store
+pmr rules evaluate --wallet 0x... --rule spread_capture
+pmr rules report-all --wallet 0x... --out /data/exports/rules.md
+pmr rules export-explained --wallet 0x... --rule spread_capture --out /data/exports/spread_capture_fills.csv
 ```

@@ -34,6 +34,7 @@ from .context import context_group
 from .dataset import dataset_group
 from .watchlist import watchlist_group
 from .worldcup import worldcup_group
+from .rules import rules_group
 
 
 @click.group()
@@ -68,6 +69,7 @@ main.add_command(worldcup_group)
 main.add_command(evidence_group)
 main.add_command(cluster_group)
 main.add_command(dataset_group)
+main.add_command(rules_group)
 replay_group.add_command(replay_episodes)
 
 

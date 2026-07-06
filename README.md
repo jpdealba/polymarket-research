@@ -43,6 +43,7 @@ pmr enrich run --wallet 0x...          # Maker/taker enrichment
 pmr books sample --wallet 0x...        # Book snapshots
 pmr fingerprints compute --wallet 0x... # Behavioral fingerprints
 pmr detect run --wallet 0x...          # Strategy detectors
+pmr rules fit --wallet 0x... --store   # Interpretable rule reconstruction
 pmr report generate --wallet 0x...     # Research report
 pmr reconcile --wallet 0x...           # Reconciliation check
 ```

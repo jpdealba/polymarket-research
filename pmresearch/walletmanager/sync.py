@@ -4,6 +4,7 @@ just wires the two together and decides window boundaries."""
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Callable
 
@@ -13,6 +14,11 @@ from ..config import Settings
 from ..rawstore.store import RawStore
 from ..sources.dataapi import GENESIS_TS, DataApiSource, FetchOutcome
 from . import manager
+
+logger = logging.getLogger(__name__)
+
+INCREMENTAL_INDEXING_DELAY_SECONDS = 60
+INCREMENTAL_OVERLAP_SECONDS = 300
 
 
 def run_backfill(
@@ -75,17 +81,53 @@ def run_incremental(
             session, settings, raw_store, source, address, on_progress=on_progress
         )
 
-    start_ts = (state.last_incremental_ts or 0) + 1
     now_ts = int(time.time())
-    if start_ts > now_ts:
+    effective_end_ts = now_ts - INCREMENTAL_INDEXING_DELAY_SECONDS
+    last_watermark = state.last_incremental_ts or 0
+    fetch_start_ts = max(0, last_watermark - INCREMENTAL_OVERLAP_SECONDS)
+    next_watermark = max(last_watermark, effective_end_ts)
+
+    if fetch_start_ts > effective_end_ts:
+        logger.info(
+            "Incremental sync skipped for %s: fetch_start=%d effective_end=%d "
+            "last_watermark=%d now=%d",
+            address,
+            fetch_start_ts,
+            effective_end_ts,
+            last_watermark,
+            now_ts,
+        )
         return FetchOutcome.empty()
+
+    logger.info(
+        "Incremental sync for %s: fetching [%d, %d] with %ds overlap and %ds "
+        "indexing delay (last_watermark=%d next_watermark=%d)",
+        address,
+        fetch_start_ts,
+        effective_end_ts,
+        INCREMENTAL_OVERLAP_SECONDS,
+        INCREMENTAL_INDEXING_DELAY_SECONDS,
+        last_watermark,
+        next_watermark,
+    )
 
     try:
         outcome = source.fetch_activity_range(
-            raw_store, address, start_ts, now_ts, on_progress=on_progress
+            raw_store,
+            address,
+            fetch_start_ts,
+            effective_end_ts,
+            on_progress=on_progress,
         )
     except Exception as exc:
         manager.record_failure(session, address, str(exc))
         raise
-    manager.record_incremental_success(session, address, up_to_ts=now_ts)
+    manager.record_incremental_success(session, address, up_to_ts=next_watermark)
+    logger.info(
+        "Incremental sync complete for %s: rows=%d requests=%d watermark=%d",
+        address,
+        outcome.rows_fetched,
+        outcome.requests_made,
+        next_watermark,
+    )
     return outcome
