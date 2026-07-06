@@ -213,6 +213,27 @@ Todos los comandos aceptan `--help` para ver la ayuda integrada.
 | `pmr rules show` | `--wallet TEXT` (requerido); `--promoted-only` (flag) | Muestra reglas persistidas en `strategy_candidates` para una wallet. |
 | `pmr rules export-explained` | `--wallet TEXT` (requerido); `--rule TEXT` (requerido); `--out PATH` (requerido); `--explained-only` (flag); `--train-ratio FLOAT` (default `0.6`); `--validation-ratio FLOAT` (default `0.2`) | Exporta a CSV los fills explicados/no explicados por una regla, con labels de evaluacion. |
 
+### sim (Fase 22)
+
+Simulador contrafactual prospectivo para reglas promovidas. Usa solo contexto permitido antes del snapshot: book-before, spread/mid pre-snapshot, inventario/exposicion antes del timestamp, metadata disponible antes del evento e historial anterior. No usa fills futuros, `fill_price`/`fill_size` observados para decidir, markouts, PnL realizado, close_path, resolucion ni precios futuros.
+
+Reglas soportadas:
+
+| Wallet | Regla |
+| --- | --- |
+| `0x2005d16a84ceefa912d4e380cd32e7ff827875ea` | `completion_set_edge` |
+| `0x83255595ba1fadd2e734cb30a0fb8110301a19cc` | `spread_capture` |
+
+`event_timing` se rechaza siempre en Fase 22.
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr sim run` | `--wallet TEXT` (requerido); exactamente uno de `--rule TEXT` o `--strategy TEXT`; `--scenario [conservative\|medium\|optimistic]` (requerido); `--max-position FLOAT` (default `500`); `--max-daily-loss FLOAT` (default `100`); `--max-capital FLOAT` (default `5000`) | Ejecuta una simulacion para una wallet/regla o wallet/estrategia/escenario. Persiste `simulation_runs`, `simulation_orders`, `simulation_skipped_orders`, `simulation_fills`, `simulation_inventory`, `simulation_pnl_daily` y `simulation_risk_events`. Muestra ordenes, fills, fill_rate, PnL, drawdown, capital, risk breaches, skips, riesgo prevenido, stale exclusions y gate conservador si aplica. |
+| `pmr sim compare` | `--wallet TEXT` (requerido); exactamente uno de `--rule TEXT` o `--strategy TEXT` | Ejecuta `optimistic`, `medium` y `conservative` y muestra comparacion de supuestos y metricas. Conservative debe ser peor o igual que optimistic; si sale mejor, marca `ordering_violation` y no pasa el gate. |
+| `pmr sim report` | `--wallet TEXT` (requerido); exactamente uno de `--rule TEXT` o `--strategy TEXT`; `--out PATH` (requerido) | Genera reporte Markdown comparativo con PASS/FAIL del gate conservador. Si conservative pierde dinero, rompe riesgo, no tiene fills o viola ordering, la regla/estrategia no avanza a paper trading. |
+
+Metricas principales: `candidate_signals_count`, `accepted_orders_count`, `skipped_orders_count`, `simulated_fills_count`, `fill_rate`, `simulated_pnl`, `net_pnl`, `max_drawdown`, `max_inventory`, `capital_required`, `turnover`, `skipped_by_reason`, `risk_prevented_count`, `risk_breaches`, `stale_context_excluded`, `conservative_pass`. `orders_count` se conserva como alias compatible de `accepted_orders_count`.
+
 ## Flujos comunes
 
 ```bash
@@ -287,4 +308,14 @@ pmr rules fit --wallet 0x... --store
 pmr rules evaluate --wallet 0x... --rule spread_capture
 pmr rules report-all --wallet 0x... --out /data/exports/rules.md
 pmr rules export-explained --wallet 0x... --rule spread_capture --out /data/exports/spread_capture_fills.csv
+
+# Simulador contrafactual (Fase 22)
+pmr sim run --wallet 0x2005d16a84ceefa912d4e380cd32e7ff827875ea --rule completion_set_edge --scenario conservative
+pmr sim run --wallet 0x83255595ba1fadd2e734cb30a0fb8110301a19cc --rule spread_capture --scenario conservative
+pmr sim run --wallet 0x2005d16a84ceefa912d4e380cd32e7ff827875ea --strategy rn1_completion_set_edge_risk_v2 --scenario conservative
+pmr sim run --wallet 0x83255595ba1fadd2e734cb30a0fb8110301a19cc --strategy gap_spread_capture_risk_v2 --scenario conservative
+pmr sim compare --wallet 0x83255595ba1fadd2e734cb30a0fb8110301a19cc --rule spread_capture
+pmr sim compare --wallet 0x83255595ba1fadd2e734cb30a0fb8110301a19cc --strategy gap_spread_capture_risk_v2
+pmr sim report --wallet 0x83255595ba1fadd2e734cb30a0fb8110301a19cc --rule spread_capture --out /data/exports/sim_spread_capture.md
+pmr sim report --wallet 0x83255595ba1fadd2e734cb30a0fb8110301a19cc --strategy gap_spread_capture_risk_v2 --out /data/exports/sim_gap_v2.md
 ```

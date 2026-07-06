@@ -80,10 +80,6 @@ El REDEEM ocurrió a las 22:16:31, **1 segundo antes del fin de ventana**, y el 
 - §2.4 (gap de ~4,408 shares): **resuelto** — eran trades perdidos por esta carrera; recuperados.
 - §2.6 (PnL RN1 +$245,281 con caveat de ~$218,763 pendientes): el PnL real es **+$323,215**. El monto no reclamado real era el REDEEM de BTTS ($92,363), que RN1 sí cobró a las 22:16:31; nuestro ledger lo había perdido. El resto de la diferencia son los trades recuperados (−$14,430 de costo adicional).
 
-### 5.5 Fix permanente pendiente (decisión de diseño)
-
-`run_incremental` (`pmresearch/walletmanager/sync.py`) debería tolerar el lag de indexado del Data API, p. ej.: retrasar el fin de ventana (`end = now − 60s`) **o** re-escanear con overlap los últimos N minutos en cada ciclo (el dedupe por `dedupe_key` hace el overlap gratis en el ledger; el costo es solo re-fetch). Sin esto, cada ráfaga intensa cerca del corte de ventana puede perder eventos.
-
 ## 6. Próximos pasos sugeridos
 
 - Implementar el overlap/lag del §5.5 y, opcionalmente, un chequeo periódico de conciliación "holdings ganadores vs positions API" como detector de gaps.
