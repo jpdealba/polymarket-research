@@ -57,6 +57,8 @@ A las **21:42:38 UTC** (`ts=1783287758`), RN1 ejecutó `MERGE` en 9 condition_id
 
 RN1 compró (solo BUY, sin ventas) 33,683.30 shares de "Over" vía trades registrados, pero el REDEEM real (reportado directo por Polymarket, `is_derived=0`) fue de 38,091.29 shares — una diferencia de ~4,408 shares (~$4,150 nocional) no explicada por ningún TRADE/MERGE/SPLIT/CONVERSION capturado en el raw store completo de RN1 (10,316 fetches revisados, sin límite de fecha). Conclusión provisional: **gap de ingesta durante la ráfaga de trading más intensa** (123 trades en ~6 min en este par Over/Under), no un mecanismo on-chain exótico. Pendiente: aislar la transacción exacta si se decide perseguirlo.
 
+**Actualización 2026-07-05 (noche): resuelto.** Eran trades reales perdidos por una carrera de late-arrival en el watermark del sync incremental (el Data API aún no había indexado los eventos cuando se consultó la ventana, y la siguiente ventana arrancó después de sus timestamps). Se re-fetchearon las ventanas del partido y se re-ingirió; residuales ahora en cero. Diagnóstico completo y reparación en `bra_nor_mex_eng_playbook_y_conciliacion_polymarket_2026-07-05.md` §5.
+
 ### 2.5 Resultado en O/U 0.5
 
 Ambas wallets apostaron a "Over" y ganaron: RN1 +$8,444 netos en ese mercado; Mind.The.Gap +$4,418 netos. Ninguna cubrió con Under de forma perfecta en ese mercado específico (RN1 sí operó Under activamente con 82 trades, terminando neto largo 16,331.56 shares — perdedoras, ya incluidas en el neto).
@@ -81,6 +83,8 @@ Calculado con la misma metodología FIFO de complete-sets ya usada en `scripts.s
 RN1 cerró positivo (+$245,281) con edge modesto pero positivo (+1.90¢/set) sobre ~3.3x más volumen de complete-sets que Gap — consistente con su perfil de escala/diversificación ya documentado.
 
 **Caveat de PnL pendiente**: RN1 tiene 4 condiciones sin evento REDEEM; de esas, 2 son posiciones ganadoras aún no reclamadas por un valor de ~$218,763 (pueden aparecer en syncs futuros — su PnL real subiría a ~$464K una vez reclamadas). Gap no tiene monto material pendiente (~$12 de dust en 5 tokens).
+
+**Actualización 2026-07-05 (noche): corregido con el ledger reparado.** El monto no reclamado real era un único REDEEM de "Both Teams to Score" por $92,363.38, que RN1 sí cobró a las 22:16:31 UTC — nuestro ledger lo perdió por la misma carrera de late-arrival del §2.4. Tras re-fetch + re-ingest (+42 trades, +1 REDEEM en este evento), el **PnL real de RN1 en este evento es +$323,215** (no +$245,281 ni ~$464K) y no queda nada pendiente (residuales = $0, verificado contra el positions API de Polymarket). Detalle en `bra_nor_mex_eng_playbook_y_conciliacion_polymarket_2026-07-05.md` §5.4.
 
 ## 3. Próximos pasos sugeridos
 
