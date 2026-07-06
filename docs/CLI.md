@@ -231,6 +231,7 @@ Reglas soportadas:
 | `pmr sim run` | `--wallet TEXT` (requerido); exactamente uno de `--rule TEXT` o `--strategy TEXT`; `--scenario [conservative\|medium\|optimistic]` (requerido); `--max-position FLOAT` (default `500`); `--max-daily-loss FLOAT` (default `100`); `--max-capital FLOAT` (default `5000`) | Ejecuta una simulacion para una wallet/regla o wallet/estrategia/escenario. Persiste `simulation_runs`, `simulation_orders`, `simulation_skipped_orders`, `simulation_fills`, `simulation_inventory`, `simulation_pnl_daily` y `simulation_risk_events`. Muestra ordenes, fills, fill_rate, PnL, drawdown, capital, risk breaches, skips, riesgo prevenido, stale exclusions y gate conservador si aplica. |
 | `pmr sim compare` | `--wallet TEXT` (requerido); exactamente uno de `--rule TEXT` o `--strategy TEXT` | Ejecuta `optimistic`, `medium` y `conservative` y muestra comparacion de supuestos y metricas. Conservative debe ser peor o igual que optimistic; si sale mejor, marca `ordering_violation` y no pasa el gate. |
 | `pmr sim report` | `--wallet TEXT` (requerido); exactamente uno de `--rule TEXT` o `--strategy TEXT`; `--out PATH` (requerido) | Genera reporte Markdown comparativo con PASS/FAIL del gate conservador. Si conservative pierde dinero, rompe riesgo, no tiene fills o viola ordering, la regla/estrategia no avanza a paper trading. |
+| `pmr sim holdout-failure` | `--wallet TEXT` (requerido); `--rule TEXT` (requerido); `--out-dir PATH` (requerido); `--search-run-id INTEGER` (opcional) | Genera diagnosticos Phase 22.3 para el candidato seleccionado: `holdout_failure_report.md` y CSVs por condition, price bucket, book age, side y time bucket. No re-selecciona parametros con test. |
 
 Metricas principales: `candidate_signals_count`, `accepted_orders_count`, `skipped_orders_count`, `simulated_fills_count`, `fill_rate`, `simulated_pnl`, `net_pnl`, `max_drawdown`, `max_inventory`, `capital_required`, `turnover`, `skipped_by_reason`, `risk_prevented_count`, `risk_breaches`, `stale_context_excluded`, `conservative_pass`. `orders_count` se conserva como alias compatible de `accepted_orders_count`.
 
@@ -318,4 +319,15 @@ pmr sim compare --wallet 0x83255595ba1fadd2e734cb30a0fb8110301a19cc --rule sprea
 pmr sim compare --wallet 0x83255595ba1fadd2e734cb30a0fb8110301a19cc --strategy gap_spread_capture_risk_v2
 pmr sim report --wallet 0x83255595ba1fadd2e734cb30a0fb8110301a19cc --rule spread_capture --out /data/exports/sim_spread_capture.md
 pmr sim report --wallet 0x83255595ba1fadd2e734cb30a0fb8110301a19cc --strategy gap_spread_capture_risk_v2 --out /data/exports/sim_gap_v2.md
+pmr sim attribution --run-id 123 --by market
+pmr sim attribution --run-id 123 --by event
+
+# Busqueda de estrategias / parameter sweep (Fase 22.2)
+pmr sim search --wallet 0x2005d16a84ceefa912d4e380cd32e7ff827875ea --rule completion_set_edge --max-combos 250 --out /data/exports/search_rn1_completion_set_edge.md
+pmr sim search --wallet 0x83255595ba1fadd2e734cb30a0fb8110301a19cc --rule spread_capture --max-combos 250 --out /data/exports/search_gap_spread_capture.md
+pmr sim top --wallet 0x2005d16a84ceefa912d4e380cd32e7ff827875ea --rule completion_set_edge --limit 10
+pmr sim top --wallet 0x83255595ba1fadd2e734cb30a0fb8110301a19cc --rule spread_capture --limit 10
+pmr sim top --wallet 0x83255595ba1fadd2e734cb30a0fb8110301a19cc --rule spread_capture --limit 10 --eligible-only
+pmr sim report-search --wallet 0x83255595ba1fadd2e734cb30a0fb8110301a19cc --rule spread_capture --out /data/exports/search_gap_latest.md
+pmr sim holdout-failure --wallet 0x83255595ba1fadd2e734cb30a0fb8110301a19cc --rule spread_capture --out-dir /data/exports/holdout_failure_gap
 ```

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 
 import pytest
@@ -9,6 +10,11 @@ from click.testing import CliRunner
 from sqlalchemy import text
 
 from pmresearch.cli import main
+from pmresearch.simulation.attribution import (
+    fetch_attribution_summary,
+    fetch_event_attribution,
+    fetch_market_attribution,
+)
 from pmresearch.simulation.engine import (
     DECISION_CONTEXT_FIELDS,
     GAP_WALLET,
@@ -18,12 +24,43 @@ from pmresearch.simulation.engine import (
     run_simulation,
     run_strategy_simulation,
 )
+from pmresearch.simulation.holdout_failure import (
+    BOOK_AGE_FILENAME,
+    CONDITION_FILENAME,
+    PRICE_BUCKET_FILENAME,
+    REPORT_FILENAME,
+    SIDE_FILENAME,
+    TIME_BUCKET_FILENAME,
+    generate_holdout_failure_diagnostics,
+    write_holdout_failure_outputs,
+)
 from pmresearch.simulation.report import generate_compare_report, generate_sim_report
 from pmresearch.simulation.risk import RiskLimits
 from pmresearch.simulation.scenarios import CONSERVATIVE, MEDIUM, OPTIMISTIC
+from pmresearch.simulation.search import (
+    SearchCandidate,
+    SearchMetric,
+    candidate_test_passes,
+    candidate_validation_passes,
+    final_status,
+    parameter_combinations,
+    rank_candidates,
+    run_strategy_search,
+    selection_score,
+    split_rows_by_time,
+    top_candidates,
+)
 
 
-def _insert_wallet_event(session, wallet: str, event_id: int, ts: int) -> int:
+def _insert_wallet_event(
+    session,
+    wallet: str,
+    event_id: int,
+    ts: int,
+    *,
+    condition_id: str = "cond_a",
+    token_id: str = "tok_a",
+) -> int:
     session.execute(
         text(
             "INSERT INTO raw_fetches "
@@ -59,8 +96,8 @@ def _insert_wallet_event(session, wallet: str, event_id: int, ts: int) -> int:
             "event_type": "TRADE",
             "ts": ts,
             "tx_hash": f"0xtest_tx_{wallet}_{event_id}",
-            "condition_id": "cond_a",
-            "token_id": "tok_a",
+            "condition_id": condition_id,
+            "token_id": token_id,
             "side": "BUY",
             "delta_shares": "100",
             "delta_usdc": "55",
@@ -90,12 +127,14 @@ def _make_row(
     qty_token_before: str = "0",
     bid_depth_top1: str = "80",
     ask_depth_top1: str = "80",
+    condition_id: str = "cond_a",
+    token_id: str = "tok_a",
 ) -> dict:
     return {
         "event_id": event_id,
         "wallet": wallet.lower(),
-        "token_id": "tok_a",
-        "condition_id": "cond_a",
+        "token_id": token_id,
+        "condition_id": condition_id,
         "trade_ts": trade_ts,
         "trade_utc": "2026-07-01T12:00:00Z",
         "side": "BUY",
@@ -173,7 +212,14 @@ def _make_row(
 
 def _insert_dataset_rows(session, wallet: str, rows: list[dict]) -> None:
     for row in rows:
-        event_id = _insert_wallet_event(session, wallet, row["event_id"], row["trade_ts"])
+        event_id = _insert_wallet_event(
+            session,
+            wallet,
+            row["event_id"],
+            row["trade_ts"],
+            condition_id=row["condition_id"],
+            token_id=row["token_id"],
+        )
         row = dict(row)
         row["event_id"] = event_id
         session.execute(
@@ -225,6 +271,40 @@ def _insert_dataset_rows(session, wallet: str, rows: list[dict]) -> None:
             ),
             row,
         )
+    session.commit()
+
+
+def _insert_market_metadata(
+    session,
+    *,
+    condition_id: str,
+    question: str,
+    event_id: str,
+    event_title: str,
+) -> None:
+    session.execute(
+        text(
+            "INSERT OR REPLACE INTO pm_events "
+            "(event_id, title, slug, neg_risk, tags_json) "
+            "VALUES (:event_id, :title, :slug, 0, '[]')"
+        ),
+        {"event_id": event_id, "title": event_title, "slug": f"event-{event_id}"},
+    )
+    session.execute(
+        text(
+            "INSERT OR REPLACE INTO markets "
+            "(condition_id, question, slug, category, event_id, neg_risk, outcomes_json, "
+            "clob_token_ids_json, closed, structure_type, updated_at) "
+            "VALUES "
+            "(:condition_id, :question, :slug, 'sports', :event_id, 0, '[]', '[]', 0, 'binary', 'now')"
+        ),
+        {
+            "condition_id": condition_id,
+            "question": question,
+            "slug": f"market-{condition_id}",
+            "event_id": event_id,
+        },
+    )
     session.commit()
 
 
@@ -544,6 +624,100 @@ def test_report_declares_conservative_pass_or_fail(session):
         assert "NOT eligible for paper trading" in report
 
 
+def test_attribution_sums_to_run_net_pnl_and_groups_metadata(session):
+    for condition_id, question, event_id, event_title in [
+        ("cond_a", "Market A", "event_1", "Event One"),
+        ("cond_b", "Market B", "event_1", "Event One"),
+        ("cond_c", "Market C", "event_2", "Event Two"),
+    ]:
+        _insert_market_metadata(
+            session,
+            condition_id=condition_id,
+            question=question,
+            event_id=event_id,
+            event_title=event_title,
+        )
+    rows = [
+        _make_row(
+            i,
+            GAP_WALLET,
+            trade_ts=1_000_000 + i * 10,
+            condition_id=["cond_a", "cond_b", "cond_c"][i % 3],
+            token_id=["tok_a", "tok_b", "tok_c"][i % 3],
+        )
+        for i in range(15)
+    ]
+    _insert_dataset_rows(session, GAP_WALLET, rows)
+
+    result = run_simulation(session, GAP_WALLET, "spread_capture", "conservative")
+    markets = fetch_market_attribution(session, result.run_id)
+    events = fetch_event_attribution(session, result.run_id)
+    summary = fetch_attribution_summary(session, result.run_id)
+
+    assert {row.condition_id for row in markets} == {"cond_a", "cond_b", "cond_c"}
+    assert {row.question for row in markets} == {"Market A", "Market B", "Market C"}
+    assert {row.event_id for row in events} == {"event_1", "event_2"}
+    assert sum((row.total_pnl for row in markets), Decimal("0")) == result.net_pnl
+    assert summary.residual == Decimal("0")
+    assert Decimal("0") <= summary.top_1_event_pnl_share <= Decimal("1")
+    assert Decimal("0") <= summary.top_3_event_pnl_share <= Decimal("1")
+    assert Decimal("0") <= summary.top_5_market_pnl_share <= Decimal("1")
+
+
+def test_attribution_cli_and_report_include_top_tables(settings, monkeypatch, session, tmp_path):
+    monkeypatch.setenv("PMR_DATA_DIR", str(settings.data_dir))
+    for condition_id, question, event_id, event_title in [
+        ("cond_a", "Market A", "event_1", "Event One"),
+        ("cond_b", "Market B", "event_1", "Event One"),
+        ("cond_c", "Market C", "event_2", "Event Two"),
+    ]:
+        _insert_market_metadata(
+            session,
+            condition_id=condition_id,
+            question=question,
+            event_id=event_id,
+            event_title=event_title,
+        )
+    rows = [
+        _make_row(
+            i,
+            GAP_WALLET,
+            trade_ts=1_000_000 + i * 10,
+            condition_id=["cond_a", "cond_b", "cond_c"][i % 3],
+            token_id=["tok_a", "tok_b", "tok_c"][i % 3],
+        )
+        for i in range(15)
+    ]
+    _insert_dataset_rows(session, GAP_WALLET, rows)
+    result = run_simulation(session, GAP_WALLET, "spread_capture", "conservative")
+    runner = CliRunner()
+
+    market_result = runner.invoke(main, ["sim", "attribution", "--run-id", str(result.run_id), "--by", "market"])
+    assert market_result.exit_code == 0, market_result.output
+    assert "condition_id" in market_result.output
+    assert "total_pnl" in market_result.output
+    assert "Market A" in market_result.output
+
+    event_result = runner.invoke(main, ["sim", "attribution", "--run-id", str(result.run_id), "--by", "event"])
+    assert event_result.exit_code == 0, event_result.output
+    assert "event_title" in event_result.output
+    assert "max_event_exposure" in event_result.output
+    assert "Event One" in event_result.output
+
+    report_out = tmp_path / "sim_report.md"
+    report_result = runner.invoke(
+        main,
+        ["sim", "report", "--wallet", GAP_WALLET, "--rule", "spread_capture", "--out", str(report_out)],
+    )
+    assert report_result.exit_code == 0, report_result.output
+    report = report_out.read_text(encoding="utf-8")
+    assert "Top 10 Markets By PnL" in report
+    assert "Top 10 Events By PnL" in report
+    assert "top_1_event_pnl_share" in report
+    assert "top_3_event_pnl_share" in report
+    assert "top_5_market_pnl_share" in report
+
+
 def test_cli_run_compare_and_report(settings, monkeypatch, session, tmp_path):
     monkeypatch.setenv("PMR_DATA_DIR", str(settings.data_dir))
     rows = [_make_row(i, GAP_WALLET, trade_ts=1_000_000 + i * 10) for i in range(10)]
@@ -624,3 +798,576 @@ def test_cli_rejects_event_timing(settings, monkeypatch):
 
     assert result.exit_code != 0
     assert "event_timing" in result.output
+
+
+def test_search_sampling_is_deterministic_with_fixed_seed():
+    first = parameter_combinations("completion_set_edge", max_combos=6, seed=2202)
+    second = parameter_combinations("completion_set_edge", max_combos=6, seed=2202)
+    different = parameter_combinations("completion_set_edge", max_combos=6, seed=2203)
+
+    assert first == second
+    assert first != different
+
+
+def test_search_split_is_time_ordered():
+    rows = [
+        _make_row(1, RN1_WALLET, trade_ts=300),
+        _make_row(2, RN1_WALLET, trade_ts=100),
+        _make_row(3, RN1_WALLET, trade_ts=600),
+        _make_row(4, RN1_WALLET, trade_ts=200),
+        _make_row(5, RN1_WALLET, trade_ts=500),
+        _make_row(6, RN1_WALLET, trade_ts=400),
+        _make_row(7, RN1_WALLET, trade_ts=700),
+        _make_row(8, RN1_WALLET, trade_ts=800),
+        _make_row(9, RN1_WALLET, trade_ts=900),
+        _make_row(10, RN1_WALLET, trade_ts=1000),
+    ]
+
+    splits = split_rows_by_time(rows)
+
+    assert [r["trade_ts"] for r in splits["train"]] == [100, 200, 300, 400, 500, 600]
+    assert [r["trade_ts"] for r in splits["validation"]] == [700, 800]
+    assert [r["trade_ts"] for r in splits["test"]] == [900, 1000]
+
+
+def test_search_works_for_rn1_and_persists_all_splits(session):
+    rows = [
+        _make_row(i, RN1_WALLET, trade_ts=1_000_000 + i * 10, best_bid_before="0.30", best_ask_before="0.50")
+        for i in range(15)
+    ]
+    _insert_dataset_rows(session, RN1_WALLET, rows)
+
+    result = run_strategy_search(session, RN1_WALLET, "completion_set_edge", max_combos=3)
+
+    assert result.rule_name == "completion_set_edge"
+    assert result.evaluated_combos == 3
+    persisted_splits = session.execute(
+        text(
+            "SELECT DISTINCT split_name FROM simulation_strategy_candidate_metrics "
+            "WHERE candidate_id IN (SELECT id FROM simulation_strategy_candidates WHERE search_run_id = :run_id)"
+        ),
+        {"run_id": result.run_id},
+    ).scalars().all()
+    assert set(persisted_splits) == {"train", "validation", "test"}
+
+
+def test_search_works_for_gap(session):
+    rows = [_make_row(i, GAP_WALLET, trade_ts=1_000_000 + i * 10) for i in range(15)]
+    _insert_dataset_rows(session, GAP_WALLET, rows)
+
+    result = run_strategy_search(session, GAP_WALLET, "spread_capture", max_combos=3)
+
+    assert result.rule_name == "spread_capture"
+    assert result.evaluated_combos == 3
+    assert all(set(candidate.metrics) == {"train", "validation", "test"} for candidate in result.candidates)
+
+
+def test_search_no_leakage_from_historical_fill_columns(session):
+    rows = [_make_row(i, GAP_WALLET, trade_ts=1_000_000 + i * 10) for i in range(15)]
+    _insert_dataset_rows(session, GAP_WALLET, rows)
+
+    before = run_strategy_search(session, GAP_WALLET, "spread_capture", max_combos=2)
+    before_metrics = [
+        (
+            c.parameters,
+            c.metrics["validation"].candidate_signals_count,
+            c.metrics["validation"].accepted_orders_count,
+            c.metrics["validation"].simulated_fills_count,
+            c.metrics["validation"].net_pnl,
+        )
+        for c in before.candidates
+    ]
+    session.execute(
+        text(
+            "UPDATE microstructure_lifecycle_dataset "
+            "SET fill_price = '0.01', fill_size = '1', realized_pnl_wac = '-9999', "
+            "markout_5m = '-999', markout_1h = '-999', pnl_at_resolution = '-9999', "
+            "close_path = 'LEAK_SENTINEL' "
+            "WHERE wallet = :wallet"
+        ),
+        {"wallet": GAP_WALLET},
+    )
+    session.commit()
+
+    after = run_strategy_search(session, GAP_WALLET, "spread_capture", max_combos=2)
+    after_metrics = [
+        (
+            c.parameters,
+            c.metrics["validation"].candidate_signals_count,
+            c.metrics["validation"].accepted_orders_count,
+            c.metrics["validation"].simulated_fills_count,
+            c.metrics["validation"].net_pnl,
+        )
+        for c in after.candidates
+    ]
+
+    assert after_metrics == before_metrics
+
+
+def test_search_ranking_excludes_risk_breaches_ordering_and_nonpositive_pnl():
+    good = _search_candidate(1, net_pnl="10", risk_breaches=0, ordering=False, fills=30)
+    risky = _search_candidate(2, net_pnl="100", risk_breaches=1, ordering=False, fills=5)
+    ordering = _search_candidate(3, net_pnl="100", risk_breaches=0, ordering=True, fills=5)
+    flat = _search_candidate(4, net_pnl="0", risk_breaches=0, ordering=False, fills=5)
+
+    ranked = rank_candidates([risky, ordering, flat, good])
+
+    assert ranked == [good]
+
+
+def test_search_selection_score_never_uses_test_split():
+    good_test = _search_candidate(
+        1,
+        train_net_pnl="20",
+        validation_net_pnl="15",
+        test_net_pnl="1000",
+        fills=40,
+    )
+    bad_test = _search_candidate(
+        2,
+        train_net_pnl="20",
+        validation_net_pnl="15",
+        test_net_pnl="-1000",
+        test_fills=0,
+        fills=40,
+    )
+
+    assert selection_score(good_test) == selection_score(bad_test)
+    assert rank_candidates([bad_test, good_test]) == [good_test, bad_test]
+
+
+def test_search_positive_test_weak_validation_is_not_selected():
+    candidate = _search_candidate(
+        1,
+        train_net_pnl="20",
+        validation_net_pnl="-1",
+        test_net_pnl="1000",
+        fills=40,
+        validation_fills=40,
+        test_fills=40,
+    )
+
+    assert rank_candidates([candidate]) == []
+    assert final_status(candidate) == "NOT_SELECTED"
+
+
+def test_search_strong_validation_failed_test_is_test_fail():
+    candidate = _search_candidate(
+        1,
+        train_net_pnl="20",
+        validation_net_pnl="15",
+        test_net_pnl="-1",
+        fills=40,
+        test_fills=40,
+    )
+
+    assert rank_candidates([candidate]) == [candidate]
+    assert candidate_validation_passes(candidate) is True
+    assert candidate_test_passes(candidate) is False
+    assert final_status(candidate) == "TEST_FAIL"
+
+
+def test_top_eligible_only_excludes_test_fail(session):
+    test_fail = _search_candidate(
+        1,
+        train_net_pnl="20",
+        validation_net_pnl="15",
+        test_net_pnl="-1",
+        fills=40,
+        test_fills=40,
+    )
+    test_pass = _search_candidate(
+        2,
+        train_net_pnl="18",
+        validation_net_pnl="14",
+        test_net_pnl="5",
+        fills=40,
+        test_fills=40,
+    )
+    _persist_search_candidates(session, GAP_WALLET, "spread_capture", [test_fail, test_pass])
+
+    all_top = top_candidates(session, GAP_WALLET, "spread_capture", limit=10)
+    eligible_top = top_candidates(session, GAP_WALLET, "spread_capture", limit=10, eligible_only=True)
+
+    assert [c.candidate_index for c in all_top] == [1, 2]
+    assert [c.candidate_index for c in eligible_top] == [2]
+
+
+def test_top_eligible_only_excludes_test_fills_below_min(session):
+    low_test_fills = _search_candidate(
+        1,
+        train_net_pnl="20",
+        validation_net_pnl="15",
+        test_net_pnl="5",
+        fills=40,
+        test_fills=29,
+    )
+    enough_test_fills = _search_candidate(
+        2,
+        train_net_pnl="18",
+        validation_net_pnl="14",
+        test_net_pnl="5",
+        fills=40,
+        test_fills=30,
+    )
+    _persist_search_candidates(session, GAP_WALLET, "spread_capture", [low_test_fills, enough_test_fills])
+
+    eligible_top = top_candidates(session, GAP_WALLET, "spread_capture", limit=10, eligible_only=True)
+
+    assert [c.candidate_index for c in eligible_top] == [2]
+
+
+def test_search_cli_commands(settings, monkeypatch, session, tmp_path):
+    monkeypatch.setenv("PMR_DATA_DIR", str(settings.data_dir))
+    rows = [_make_row(i, GAP_WALLET, trade_ts=1_000_000 + i * 10) for i in range(15)]
+    _insert_dataset_rows(session, GAP_WALLET, rows)
+    runner = CliRunner()
+    out = tmp_path / "search.md"
+
+    search_result = runner.invoke(
+        main,
+        [
+            "sim",
+            "search",
+            "--wallet",
+            GAP_WALLET,
+            "--rule",
+            "spread_capture",
+            "--max-combos",
+            "2",
+            "--out",
+            str(out),
+        ],
+    )
+    assert search_result.exit_code == 0, search_result.output
+    assert out.exists()
+    assert "search_run_id=" in search_result.output
+
+    top_result = runner.invoke(
+        main,
+        ["sim", "top", "--wallet", GAP_WALLET, "--rule", "spread_capture", "--limit", "2"],
+    )
+    assert top_result.exit_code == 0, top_result.output
+    assert ("No eligible candidates found." in top_result.output) or ("rank candidate score" in top_result.output)
+
+    report_out = tmp_path / "report_search.md"
+    report_result = runner.invoke(
+        main,
+        [
+            "sim",
+            "report-search",
+            "--wallet",
+            GAP_WALLET,
+            "--rule",
+            "spread_capture",
+            "--out",
+            str(report_out),
+        ],
+    )
+    assert report_result.exit_code == 0, report_result.output
+    assert "Strategy Search: spread_capture" in report_out.read_text(encoding="utf-8")
+
+
+def test_holdout_failure_outputs_required_files(settings, monkeypatch, session, tmp_path):
+    monkeypatch.setenv("PMR_DATA_DIR", str(settings.data_dir))
+    rows = []
+    for i in range(15):
+        is_test = i >= 12
+        rows.append(
+            _make_row(
+                i,
+                RN1_WALLET,
+                trade_ts=1_000_000 + i * 10,
+                best_bid_before="0.30",
+                best_ask_before="0.50",
+                mid_before="0.20" if is_test else "0.50",
+                context_status="weak" if i == 13 else "good",
+                condition_id="cond_holdout",
+                token_id="tok_holdout",
+            )
+        )
+    _insert_dataset_rows(session, RN1_WALLET, rows)
+    _insert_market_metadata(
+        session,
+        condition_id="cond_holdout",
+        question="Holdout Market",
+        event_id="event-holdout",
+        event_title="Holdout Event",
+    )
+    candidate = _search_candidate(
+        1,
+        train_net_pnl="20",
+        validation_net_pnl="10",
+        test_net_pnl="-1",
+        fills=40,
+        test_fills=40,
+    )
+    candidate.parameters = {
+        "max_bond_cost": "0.99",
+        "book_age_s_max": 30,
+        "max_order_size": "10",
+        "max_position_per_token": "1000",
+        "max_event_exposure": "1000",
+        "max_capital_deployed": "10000",
+        "min_depth": "0",
+    }
+    _persist_search_candidates(session, RN1_WALLET, "completion_set_edge", [candidate])
+
+    diagnostics = write_holdout_failure_outputs(
+        session,
+        RN1_WALLET,
+        "completion_set_edge",
+        tmp_path,
+    )
+
+    assert diagnostics.candidate.candidate_id is not None
+    for filename in (
+        REPORT_FILENAME,
+        CONDITION_FILENAME,
+        PRICE_BUCKET_FILENAME,
+        BOOK_AGE_FILENAME,
+        SIDE_FILENAME,
+        TIME_BUCKET_FILENAME,
+    ):
+        assert (tmp_path / filename).exists()
+    report = (tmp_path / REPORT_FILENAME).read_text(encoding="utf-8")
+    assert "Diagnostic only" in report
+    assert "Holdout Event" in report
+    assert "Simulated Fill vs Skipped" in report
+    assert "Do not choose final thresholds from this test report" in report
+    condition_csv = (tmp_path / CONDITION_FILENAME).read_text(encoding="utf-8")
+    assert "event_id,event_title,condition_id,question" in condition_csv
+    assert "event-holdout,Holdout Event,cond_holdout,Holdout Market" in condition_csv
+
+    cli_out = tmp_path / "cli"
+    cli_result = CliRunner().invoke(
+        main,
+        [
+            "sim",
+            "holdout-failure",
+            "--wallet",
+            RN1_WALLET,
+            "--rule",
+            "completion_set_edge",
+            "--out-dir",
+            str(cli_out),
+        ],
+    )
+    assert cli_result.exit_code == 0, cli_result.output
+    assert "holdout_failure search_run_id=" in cli_result.output
+    assert (cli_out / REPORT_FILENAME).exists()
+
+
+def test_holdout_failure_does_not_change_selected_candidate(session):
+    rows = [
+        _make_row(
+            i,
+            RN1_WALLET,
+            trade_ts=1_000_000 + i * 10,
+            best_bid_before="0.30",
+            best_ask_before="0.50",
+            mid_before="0.50",
+            condition_id="cond_no_leak",
+            token_id="tok_no_leak",
+        )
+        for i in range(15)
+    ]
+    _insert_dataset_rows(session, RN1_WALLET, rows)
+    candidate = _search_candidate(
+        1,
+        train_net_pnl="20",
+        validation_net_pnl="10",
+        test_net_pnl="-1",
+        fills=40,
+        test_fills=40,
+    )
+    candidate.parameters = {
+        "max_bond_cost": "0.99",
+        "book_age_s_max": 30,
+        "max_order_size": "10",
+        "max_position_per_token": "1000",
+        "max_event_exposure": "1000",
+        "max_capital_deployed": "10000",
+        "min_depth": "0",
+    }
+    _persist_search_candidates(session, RN1_WALLET, "completion_set_edge", [candidate])
+    before = session.execute(
+        text("SELECT selected_candidate_id FROM simulation_strategy_search_runs")
+    ).scalar_one()
+
+    generate_holdout_failure_diagnostics(session, RN1_WALLET, "completion_set_edge")
+
+    after = session.execute(
+        text("SELECT selected_candidate_id FROM simulation_strategy_search_runs")
+    ).scalar_one()
+    assert after == before
+
+
+def _search_candidate(
+    candidate_index: int,
+    *,
+    net_pnl: str | None = None,
+    train_net_pnl: str | None = None,
+    validation_net_pnl: str | None = None,
+    test_net_pnl: str | None = None,
+    risk_breaches: int = 0,
+    ordering: bool = False,
+    fills: int = 30,
+    train_fills: int | None = None,
+    validation_fills: int | None = None,
+    test_fills: int | None = None,
+) -> SearchCandidate:
+    train_net_pnl = train_net_pnl or net_pnl or "10"
+    validation_net_pnl = validation_net_pnl or net_pnl or "10"
+    test_net_pnl = test_net_pnl or net_pnl or "10"
+    train_fills = fills if train_fills is None else train_fills
+    validation_fills = fills if validation_fills is None else validation_fills
+    test_fills = fills if test_fills is None else test_fills
+    metrics = {
+        "train": _search_metric(
+            "train",
+            net_pnl=train_net_pnl,
+            risk_breaches=risk_breaches,
+            ordering=ordering,
+            fills=train_fills,
+        ),
+        "validation": _search_metric(
+            "validation",
+            net_pnl=validation_net_pnl,
+            risk_breaches=risk_breaches,
+            ordering=ordering,
+            fills=validation_fills,
+        ),
+        "test": _search_metric(
+            "test",
+            net_pnl=test_net_pnl,
+            risk_breaches=risk_breaches,
+            ordering=ordering,
+            fills=test_fills,
+        ),
+    }
+    return SearchCandidate(
+        candidate_id=candidate_index,
+        candidate_index=candidate_index,
+        strategy_name=f"candidate_{candidate_index}",
+        parameters={},
+        metrics=metrics,
+    )
+
+
+def _search_metric(
+    split_name: str,
+    *,
+    net_pnl: str,
+    risk_breaches: int,
+    ordering: bool,
+    fills: int,
+) -> SearchMetric:
+    return SearchMetric(
+        split_name=split_name,
+        candidate_signals_count=5,
+        accepted_orders_count=fills,
+        skipped_orders_count=0,
+        skipped_by_reason={},
+        simulated_fills_count=fills,
+        fill_rate_on_candidates=Decimal("1"),
+        net_pnl=Decimal(net_pnl),
+        max_drawdown=Decimal("1"),
+        max_inventory=Decimal("1"),
+        capital_required=Decimal("10"),
+        turnover=Decimal("10"),
+        risk_breaches=risk_breaches,
+        risk_prevented_count=0,
+        ordering_violation=ordering,
+        conservative_pass=(Decimal(net_pnl) > Decimal("0") and risk_breaches == 0 and not ordering and fills > 0),
+        score=Decimal(net_pnl) / Decimal("10") if Decimal(net_pnl) > Decimal("0") else None,
+    )
+
+
+def _persist_search_candidates(
+    session,
+    wallet: str,
+    rule_name: str,
+    candidates: list[SearchCandidate],
+) -> None:
+    session.execute(
+        text(
+            "INSERT INTO simulation_strategy_search_runs "
+            "(wallet, rule_name, strategy_family, seed, max_combos, total_combos, evaluated_combos, "
+            "selected_candidate_id, run_ts, elapsed_ms, status, notes) "
+            "VALUES (:wallet, :rule_name, 'test', 2202, :count, :count, :count, NULL, 1, 0, 'complete', '')"
+        ),
+        {"wallet": wallet, "rule_name": rule_name, "count": len(candidates)},
+    )
+    run_id = session.execute(text("SELECT last_insert_rowid()")).scalar_one()
+    ranked = rank_candidates(candidates)
+    selected_id = None
+    for rank, candidate in enumerate(ranked, start=1):
+        result = session.execute(
+            text(
+                "INSERT INTO simulation_strategy_candidates "
+                "(search_run_id, candidate_index, strategy_name, parameter_json, rank_index, eligible, selected_for_test) "
+                "VALUES (:run_id, :candidate_index, :strategy_name, :parameter_json, :rank, 1, :selected)"
+            ),
+            {
+                "run_id": run_id,
+                "candidate_index": candidate.candidate_index,
+                "strategy_name": candidate.strategy_name,
+                "parameter_json": json.dumps(candidate.parameters, sort_keys=True),
+                "rank": rank,
+                "selected": 1 if rank == 1 else 0,
+            },
+        )
+        candidate_id = int(result.lastrowid)
+        if rank == 1:
+            selected_id = candidate_id
+        _persist_candidate_metrics(session, candidate_id, candidate.metrics)
+    if selected_id is not None:
+        session.execute(
+            text(
+                "UPDATE simulation_strategy_search_runs "
+                "SET selected_candidate_id = :selected_id WHERE id = :run_id"
+            ),
+            {"selected_id": selected_id, "run_id": run_id},
+        )
+    session.commit()
+
+
+def _persist_candidate_metrics(
+    session,
+    candidate_id: int,
+    metrics: dict[str, SearchMetric],
+) -> None:
+    for metric in metrics.values():
+        session.execute(
+            text(
+                "INSERT INTO simulation_strategy_candidate_metrics "
+                "(candidate_id, split_name, candidate_signals_count, accepted_orders_count, "
+                "skipped_orders_count, skipped_by_reason_json, simulated_fills_count, fill_rate_on_candidates, "
+                "net_pnl, max_drawdown, max_inventory, capital_required, turnover, risk_breaches, "
+                "risk_prevented_count, ordering_violation, conservative_pass, score) "
+                "VALUES (:candidate_id, :split_name, :candidate_signals_count, :accepted_orders_count, "
+                ":skipped_orders_count, '{}', :simulated_fills_count, :fill_rate_on_candidates, "
+                ":net_pnl, :max_drawdown, :max_inventory, :capital_required, :turnover, :risk_breaches, "
+                ":risk_prevented_count, :ordering_violation, :conservative_pass, :score)"
+            ),
+            {
+                "candidate_id": candidate_id,
+                "split_name": metric.split_name,
+                "candidate_signals_count": metric.candidate_signals_count,
+                "accepted_orders_count": metric.accepted_orders_count,
+                "skipped_orders_count": metric.skipped_orders_count,
+                "simulated_fills_count": metric.simulated_fills_count,
+                "fill_rate_on_candidates": str(metric.fill_rate_on_candidates),
+                "net_pnl": str(metric.net_pnl),
+                "max_drawdown": str(metric.max_drawdown),
+                "max_inventory": str(metric.max_inventory),
+                "capital_required": str(metric.capital_required),
+                "turnover": str(metric.turnover),
+                "risk_breaches": metric.risk_breaches,
+                "risk_prevented_count": metric.risk_prevented_count,
+                "ordering_violation": 1 if metric.ordering_violation else 0,
+                "conservative_pass": 1 if metric.conservative_pass else 0,
+                "score": str(metric.score) if metric.score is not None else None,
+            },
+        )

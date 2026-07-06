@@ -18,6 +18,7 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from .attribution import insert_run_attribution
 from .risk import RiskEvent, RiskLimits, check_all_risks
 from .scenarios import ALL_SCENARIOS, ScenarioConfig, SimOrder, decide_fill
 
@@ -46,6 +47,7 @@ class StrategyConfig:
     wallet: str
     base_rule: str
     version: int
+    rule_parameters: dict[str, object] = field(default_factory=dict)
     filters: dict[str, object] = field(default_factory=dict)
     execution_policy: dict[str, object] = field(default_factory=dict)
     pre_trade_risk_limits: tuple[str, ...] = ()
@@ -62,7 +64,7 @@ class StrategyConfig:
             "filters": self.filters,
             "execution_policy": self.execution_policy,
             "pre_trade_risk_limits": list(self.pre_trade_risk_limits),
-            "base_rule_parameters": dict(SUPPORTED_RULES[self.base_rule]["parameters"]),
+            "base_rule_parameters": _rule_parameters(self),
         }
 
 
@@ -483,6 +485,7 @@ class _TransientResult:
     inventory: list[dict]
     daily_pnl: dict[str, dict]
     risk_events: list[RiskEvent]
+    market_attribution: list[dict]
     candidate_signals_count: int
     orders_count: int
     fills_count: int
@@ -564,6 +567,7 @@ def run_simulation(
     _insert_inventory(session, run_id, transient.inventory)
     _insert_daily_pnl(session, run_id, transient.daily_pnl)
     _insert_risk_events(session, run_id, transient.risk_events)
+    insert_run_attribution(session, run_id, transient.market_attribution)
     session.commit()
 
     return SimRunResult(
@@ -659,6 +663,7 @@ def run_strategy_simulation(
     _insert_inventory(session, run_id, transient.inventory)
     _insert_daily_pnl(session, run_id, transient.daily_pnl)
     _insert_risk_events(session, run_id, transient.risk_events)
+    insert_run_attribution(session, run_id, transient.market_attribution)
     session.commit()
 
     return SimRunResult(
@@ -713,6 +718,7 @@ def _rule_compat_strategy(wallet: str, rule_name: str) -> StrategyConfig:
         wallet=wallet,
         base_rule=rule_name,
         version=int(SUPPORTED_RULES[rule_name]["version"]),
+        rule_parameters=dict(SUPPORTED_RULES[rule_name]["parameters"]),
         execution_policy={"candidate_order_price": "book_before"},
     )
 
@@ -762,6 +768,8 @@ def _simulate(
     strategy: StrategyConfig,
     scenario: ScenarioConfig,
     risk_limits: RiskLimits,
+    *,
+    collect_details: bool = True,
 ) -> _TransientResult:
     portfolio = PortfolioState()
     orders: list[dict] = []
@@ -770,10 +778,13 @@ def _simulate(
     inventory: list[dict] = []
     daily_pnl: dict[str, dict] = {}
     risk_events: list[RiskEvent] = []
+    market_attribution: dict[str, dict] = {}
     skipped_by_reason: dict[str, int] = {}
     day_start_values: dict[str, Decimal] = {}
     stopped_days: set[str] = set()
     rule_fires = 0
+    orders_count = 0
+    skipped_orders_count = 0
     stale_excluded = 0
     risk_prevented_count = 0
     fill_seq = 0
@@ -782,15 +793,17 @@ def _simulate(
         ctx = DecisionContext.from_row(row)
         mid = ctx.decimal("mid_before")
         portfolio.mark(ctx.token_id, ctx.condition_id, mid)
+        if collect_details:
+            _update_market_path_attribution(market_attribution, portfolio, ctx)
         day = _ts_to_date(ctx.trade_ts)
         day_start_values.setdefault(day, portfolio.value())
 
-        decision = _decide_rule_order(strategy.base_rule, ctx, scenario)
+        decision = _decide_rule_order(strategy, ctx, scenario)
         if not decision.applies or decision.order is None:
             continue
 
         rule_fires += 1
-        filter_reason = _strategy_filter_skip_reason(strategy, ctx)
+        filter_reason = _strategy_filter_skip_reason(strategy, ctx, decision)
         if filter_reason is not None:
             _record_skip(
                 skipped_orders=skipped_orders,
@@ -799,7 +812,9 @@ def _simulate(
                 decision=decision,
                 strategy=strategy,
                 reason=filter_reason,
+                collect_details=collect_details,
             )
+            skipped_orders_count += 1
             continue
 
         if strategy.uses_pre_trade_risk:
@@ -811,7 +826,9 @@ def _simulate(
                     decision=decision,
                     strategy=strategy,
                     reason="max_daily_loss_day_stopped",
+                    collect_details=collect_details,
                 )
+                skipped_orders_count += 1
                 risk_prevented_count += 1
                 continue
 
@@ -832,7 +849,9 @@ def _simulate(
                     decision=decision,
                     strategy=strategy,
                     reason=risk_reason,
+                    collect_details=collect_details,
                 )
+                skipped_orders_count += 1
                 risk_prevented_count += 1
                 if (
                     strategy.execution_policy.get("daily_loss_stop_utc_day")
@@ -842,24 +861,26 @@ def _simulate(
                 continue
 
         is_stale = _is_stale(ctx, risk_limits)
-        order_index = len(orders)
-        orders.append(
-            {
-                "run_id": 0,
-                "event_id": ctx.event_id,
-                "token_id": ctx.token_id,
-                "condition_id": ctx.condition_id,
-                "side": decision.order.side,
-                "order_price": str(decision.order.order_price),
-                "order_size": str(decision.order.order_size),
-                "rule_fires": 1,
-                "rule_explanation": decision.explanation,
-                "context_status": ctx.context_status,
-                "book_age_s": ctx.integer("book_before_age_s"),
-                "stale_excluded": 1 if is_stale else 0,
-                "created_ts": ctx.trade_ts,
-            }
-        )
+        order_index = orders_count
+        orders_count += 1
+        if collect_details:
+            orders.append(
+                {
+                    "run_id": 0,
+                    "event_id": ctx.event_id,
+                    "token_id": ctx.token_id,
+                    "condition_id": ctx.condition_id,
+                    "side": decision.order.side,
+                    "order_price": str(decision.order.order_price),
+                    "order_size": str(decision.order.order_size),
+                    "rule_fires": 1,
+                    "rule_explanation": decision.explanation,
+                    "context_status": ctx.context_status,
+                    "book_age_s": ctx.integer("book_before_age_s"),
+                    "stale_excluded": 1 if is_stale else 0,
+                    "created_ts": ctx.trade_ts,
+                }
+            )
 
         if is_stale:
             stale_excluded += 1
@@ -890,6 +911,15 @@ def _simulate(
             mark_price=mid,
         )
         notional = assumption.fill_price * assumption.fill_size
+        if collect_details:
+            _record_market_fill_attribution(
+                market_attribution=market_attribution,
+                portfolio=portfolio,
+                ctx=ctx,
+                side=decision.order.side,
+                notional=notional,
+                fee=fee,
+            )
         pnl_value = portfolio.value()
         day_row = daily_pnl.setdefault(
             day,
@@ -921,47 +951,50 @@ def _simulate(
             ts=ctx.trade_ts,
         )
         for ev in breaches:
-            risk_events.append(ev)
+            if collect_details:
+                risk_events.append(ev)
             portfolio.risk_breach_count += 1
             day_row["breaches"] += 1
 
-        fills.append(
-            {
-                "run_id": 0,
-                "order_index": order_index,
-                "event_id": ctx.event_id,
-                "token_id": ctx.token_id,
-                "condition_id": ctx.condition_id,
-                "side": decision.order.side,
-                "fill_price": str(assumption.fill_price),
-                "fill_size": str(assumption.fill_size),
-                "fill_notional_usdc": str(notional),
-                "estimated_fee": str(fee),
-                "scenario": scenario.name,
-                "fill_reason": assumption.fill_reason,
-                "filled_ts": ctx.trade_ts,
-            }
-        )
-        inventory.append(
-            {
-                "run_id": 0,
-                "event_id": ctx.event_id,
-                "token_id": ctx.token_id,
-                "condition_id": ctx.condition_id,
-                "qty_token": str(pos.qty),
-                "qty_complement": "0",
-                "directional": str(pos.qty),
-                "bond": "0",
-                "cost_basis": "0",
-                "mark_price": str(pos.mark_price),
-                "unrealized_pnl": str(pos.value()),
-                "event_exposure": str(ctx.decimal("event_exposure_before") or _ZERO),
-                "snapshot_ts": ctx.trade_ts,
-            }
-        )
+        if collect_details:
+            fills.append(
+                {
+                    "run_id": 0,
+                    "order_index": order_index,
+                    "event_id": ctx.event_id,
+                    "token_id": ctx.token_id,
+                    "condition_id": ctx.condition_id,
+                    "side": decision.order.side,
+                    "fill_price": str(assumption.fill_price),
+                    "fill_size": str(assumption.fill_size),
+                    "fill_notional_usdc": str(notional),
+                    "estimated_fee": str(fee),
+                    "scenario": scenario.name,
+                    "fill_reason": assumption.fill_reason,
+                    "filled_ts": ctx.trade_ts,
+                }
+            )
+            inventory.append(
+                {
+                    "run_id": 0,
+                    "event_id": ctx.event_id,
+                    "token_id": ctx.token_id,
+                    "condition_id": ctx.condition_id,
+                    "qty_token": str(pos.qty),
+                    "qty_complement": "0",
+                    "directional": str(pos.qty),
+                    "bond": "0",
+                    "cost_basis": "0",
+                    "mark_price": str(pos.mark_price),
+                    "unrealized_pnl": str(pos.value()),
+                    "event_exposure": str(ctx.decimal("event_exposure_before") or _ZERO),
+                    "snapshot_ts": ctx.trade_ts,
+                }
+            )
 
     net_pnl = portfolio.value()
     fill_rate = Decimal(portfolio.fill_count) / Decimal(rule_fires) if rule_fires else None
+    market_rows = _finalize_market_attribution(market_attribution, portfolio) if collect_details else []
     return _TransientResult(
         orders=orders,
         skipped_orders=skipped_orders,
@@ -969,8 +1002,9 @@ def _simulate(
         inventory=inventory,
         daily_pnl=daily_pnl,
         risk_events=risk_events,
+        market_attribution=market_rows,
         candidate_signals_count=rule_fires,
-        orders_count=len(orders),
+        orders_count=orders_count,
         fills_count=portfolio.fill_count,
         fill_rate=fill_rate,
         simulated_pnl=net_pnl,
@@ -979,7 +1013,7 @@ def _simulate(
         max_inventory=portfolio.max_inventory_seen,
         capital_required=portfolio.max_capital_seen,
         turnover=portfolio.turnover,
-        skipped_orders_count=len(skipped_orders),
+        skipped_orders_count=skipped_orders_count,
         skipped_by_reason=skipped_by_reason,
         risk_prevented_count=risk_prevented_count,
         risk_breaches=portfolio.risk_breach_count,
@@ -987,15 +1021,26 @@ def _simulate(
     )
 
 
-def _decide_rule_order(rule_name: str, ctx: DecisionContext, scenario: ScenarioConfig) -> RuleDecision:
+def _decide_rule_order(strategy: StrategyConfig, ctx: DecisionContext, scenario: ScenarioConfig) -> RuleDecision:
+    rule_name = strategy.base_rule
     if rule_name == "spread_capture":
-        return _spread_capture_order(ctx, scenario)
+        return _spread_capture_order(ctx, scenario, _rule_parameters(strategy))
     if rule_name == "completion_set_edge":
-        return _completion_set_order(ctx, scenario)
+        return _completion_set_order(ctx, scenario, _rule_parameters(strategy))
     raise ValueError(f"Unsupported simulation rule: {rule_name}")
 
 
-def _spread_capture_order(ctx: DecisionContext, scenario: ScenarioConfig) -> RuleDecision:
+def _rule_parameters(strategy: StrategyConfig) -> dict[str, object]:
+    params = dict(SUPPORTED_RULES[strategy.base_rule]["parameters"])
+    params.update(strategy.rule_parameters)
+    return params
+
+
+def _spread_capture_order(
+    ctx: DecisionContext,
+    scenario: ScenarioConfig,
+    parameters: dict[str, object],
+) -> RuleDecision:
     spread_bps = ctx.decimal("spread_bps")
     bid = ctx.decimal("best_bid_before")
     ask = ctx.decimal("best_ask_before")
@@ -1008,8 +1053,8 @@ def _spread_capture_order(ctx: DecisionContext, scenario: ScenarioConfig) -> Rul
         "mid_before": ctx.get("mid_before"),
         "qty_token_before": ctx.get("qty_token_before"),
     }
-    threshold = Decimal(str(SUPPORTED_RULES["spread_capture"]["parameters"]["min_spread_bps"]))
-    edge_threshold = Decimal(str(SUPPORTED_RULES["spread_capture"]["parameters"]["min_edge_bps"]))
+    threshold = Decimal(str(parameters["min_spread_bps"]))
+    edge_threshold = Decimal(str(parameters.get("min_edge_bps", parameters.get("min_fill_improvement_bps", "10"))))
     if spread_bps is None or bid is None or ask is None or mid in (None, _ZERO):
         return RuleDecision(False, None, "missing book-before spread fields", features)
     if spread_bps < threshold:
@@ -1038,7 +1083,11 @@ def _spread_capture_order(ctx: DecisionContext, scenario: ScenarioConfig) -> Rul
     )
 
 
-def _completion_set_order(ctx: DecisionContext, scenario: ScenarioConfig) -> RuleDecision:
+def _completion_set_order(
+    ctx: DecisionContext,
+    scenario: ScenarioConfig,
+    parameters: dict[str, object],
+) -> RuleDecision:
     bid = ctx.decimal("best_bid_before")
     ask = ctx.decimal("best_ask_before")
     features = {
@@ -1051,7 +1100,7 @@ def _completion_set_order(ctx: DecisionContext, scenario: ScenarioConfig) -> Rul
     if bid is None or ask is None:
         return RuleDecision(False, None, "missing book-before bid/ask", features)
 
-    max_bond_cost = Decimal(str(SUPPORTED_RULES["completion_set_edge"]["parameters"]["max_bond_cost"]))
+    max_bond_cost = Decimal(str(parameters["max_bond_cost"]))
     total_cost = bid + ask
     if total_cost > max_bond_cost:
         return RuleDecision(False, None, f"prospective bond cost {total_cost:.4f} > {max_bond_cost}", features)
@@ -1072,7 +1121,11 @@ def _order_size(depth: Optional[Decimal], scenario: ScenarioConfig) -> Decimal:
     return max(Decimal("1"), min(scenario.max_order_size, depth * scenario.depth_fraction))
 
 
-def _strategy_filter_skip_reason(strategy: StrategyConfig, ctx: DecisionContext) -> Optional[str]:
+def _strategy_filter_skip_reason(
+    strategy: StrategyConfig,
+    ctx: DecisionContext,
+    decision: RuleDecision,
+) -> Optional[str]:
     if not strategy.filters:
         return None
 
@@ -1084,6 +1137,13 @@ def _strategy_filter_skip_reason(strategy: StrategyConfig, ctx: DecisionContext)
     age = ctx.integer("book_before_age_s")
     if max_book_age_s is not None and age is not None and age > int(max_book_age_s):
         return "book_age_s"
+
+    min_depth = strategy.filters.get("min_depth")
+    if min_depth is not None and decision.order is not None:
+        depth_key = "ask_depth_top1" if decision.order.side == "BUY" else "bid_depth_top1"
+        depth = ctx.decimal(depth_key)
+        if depth is None or depth < Decimal(str(min_depth)):
+            return "min_depth"
 
     return None
 
@@ -1161,8 +1221,11 @@ def _record_skip(
     decision: RuleDecision,
     strategy: StrategyConfig,
     reason: str,
+    collect_details: bool = True,
 ) -> None:
     skipped_by_reason[reason] = skipped_by_reason.get(reason, 0) + 1
+    if not collect_details:
+        return
     order = decision.order
     skipped_orders.append(
         {
@@ -1195,6 +1258,98 @@ def _has_ordering_violation(conservative: _TransientResult, optimistic: _Transie
         conservative.fills_count > optimistic.fills_count
         or conservative.net_pnl > optimistic.net_pnl
     )
+
+
+def _market_attribution_key(ctx: DecisionContext) -> str:
+    return ctx.condition_id or f"token:{ctx.token_id}"
+
+
+def _ensure_market_attribution(
+    market_attribution: dict[str, dict],
+    ctx: DecisionContext,
+) -> dict:
+    key = _market_attribution_key(ctx)
+    if key not in market_attribution:
+        market_attribution[key] = {
+            "condition_id": ctx.condition_id or key,
+            "event_id": str(ctx.event_id),
+            "fills_count": 0,
+            "fill_notional": _ZERO,
+            "realized_pnl": _ZERO,
+            "unrealized_pnl": _ZERO,
+            "total_pnl": _ZERO,
+            "max_inventory": _ZERO,
+            "max_exposure": _ZERO,
+            "turnover": _ZERO,
+        }
+    return market_attribution[key]
+
+
+def _update_market_path_attribution(
+    market_attribution: dict[str, dict],
+    portfolio: PortfolioState,
+    ctx: DecisionContext,
+) -> None:
+    pos = portfolio.positions.get(ctx.token_id)
+    if pos is None:
+        return
+    bucket = _ensure_market_attribution(market_attribution, ctx)
+    if abs(pos.qty) > bucket["max_inventory"]:
+        bucket["max_inventory"] = abs(pos.qty)
+    exposure = abs(pos.value())
+    if exposure > bucket["max_exposure"]:
+        bucket["max_exposure"] = exposure
+
+
+def _record_market_fill_attribution(
+    *,
+    market_attribution: dict[str, dict],
+    portfolio: PortfolioState,
+    ctx: DecisionContext,
+    side: str,
+    notional: Decimal,
+    fee: Decimal,
+) -> None:
+    bucket = _ensure_market_attribution(market_attribution, ctx)
+    bucket["fills_count"] += 1
+    bucket["fill_notional"] += notional
+    bucket["turnover"] += notional
+    if side == "BUY":
+        bucket["realized_pnl"] -= notional + fee
+    else:
+        bucket["realized_pnl"] += notional - fee
+    _update_market_path_attribution(market_attribution, portfolio, ctx)
+
+
+def _finalize_market_attribution(
+    market_attribution: dict[str, dict],
+    portfolio: PortfolioState,
+) -> list[dict]:
+    values_by_condition: dict[str, Decimal] = {}
+    for pos in portfolio.positions.values():
+        key = pos.condition_id or f"token:{pos.token_id}"
+        values_by_condition[key] = values_by_condition.get(key, _ZERO) + pos.value()
+
+    rows: list[dict] = []
+    for key, bucket in sorted(market_attribution.items()):
+        unrealized = values_by_condition.get(key, _ZERO)
+        realized = bucket["realized_pnl"]
+        total = realized + unrealized
+        rows.append(
+            {
+                "condition_id": bucket["condition_id"],
+                "event_id": bucket["event_id"],
+                "fills_count": bucket["fills_count"],
+                "fill_notional": str(bucket["fill_notional"]),
+                "realized_pnl": str(realized),
+                "unrealized_pnl": str(unrealized),
+                "total_pnl": str(total),
+                "max_inventory": str(bucket["max_inventory"]),
+                "max_exposure": str(bucket["max_exposure"]),
+                "turnover": str(bucket["turnover"]),
+            }
+        )
+    return rows
 
 
 def _insert_run(
