@@ -914,7 +914,11 @@ def test_promoted_only_excludes_degenerate_event_timing(settings, session, tmp_p
     spread = fit_result_from_eval(evaluate_rule(session, WALLET, SpreadCapture()))
     event_timing = fit_result_from_eval(evaluate_rule(session, WALLET, EventTiming()))
     store_fit_result(session, WALLET, replace(spread, promoted=True, promotion_rejection_reason=None))
-    store_fit_result(session, WALLET, event_timing)
+    store_fit_result(
+        session,
+        WALLET,
+        replace(event_timing, promoted=True, promotion_rejection_reason=None),
+    )
 
     monkeypatch.setenv("PMR_DATA_DIR", str(settings.data_dir))
     runner = CliRunner()
@@ -937,6 +941,7 @@ def test_promoted_only_excludes_degenerate_event_timing(settings, session, tmp_p
     assert "- Rules promoted: 1" in report
     assert "| spread_capture | 1 | yes |" in report
     assert "| event_timing | 1 | no |" in report
+    assert "- Promotion rejection reason: no_active_predicate" in report
 
 
 def test_rules_cli_smoke(settings, session, tmp_path, monkeypatch):

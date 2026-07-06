@@ -405,6 +405,16 @@ class StoredCandidate:
     fitted_at: str
 
 
+def _stored_has_active_predicate(rule_name: str, parameters: dict) -> bool:
+    if rule_name == "event_timing":
+        return bool(
+            parameters.get("allowed_hours_utc")
+            or parameters.get("max_time_to_event_start_s") is not None
+            or parameters.get("min_time_to_event_start_s") is not None
+        )
+    return True
+
+
 def _decimal_or_none(value: Optional[str]) -> Optional[Decimal]:
     if value is None:
         return None
@@ -458,8 +468,6 @@ def fetch_candidates(
     """Load strategy_candidates for a wallet."""
     where = ["wallet = :w"]
     params: dict = {"w": wallet.lower()}
-    if promoted_only:
-        where.append("promoted = 1")
     rows = session.execute(
         text(
             "SELECT * FROM strategy_candidates "
@@ -467,23 +475,29 @@ def fetch_candidates(
         ),
         params,
     ).mappings().fetchall()
-    return [
-        StoredCandidate(
-            wallet=r["wallet"],
-            rule_name=r["rule_name"],
-            rule_version=int(r["rule_version"]),
-            parameters=json.loads(r["parameters_json"]),
-            features_used=json.loads(r["features_used_json"]),
-            promoted=bool(r["promoted"]),
-            explained_fills_pct=r["explained_fills_pct"],
-            expected_pnl_or_markout=r["expected_pnl_or_markout"],
-            inventory_impact=r["inventory_impact"],
-            risk_requirements=r["risk_requirements"],
-            blind_spots=r["blind_spots"],
-            fitted_at=r["fitted_at"],
+    candidates: list[StoredCandidate] = []
+    for r in rows:
+        parameters = json.loads(r["parameters_json"])
+        candidates.append(
+            StoredCandidate(
+                wallet=r["wallet"],
+                rule_name=r["rule_name"],
+                rule_version=int(r["rule_version"]),
+                parameters=parameters,
+                features_used=json.loads(r["features_used_json"]),
+                promoted=bool(r["promoted"])
+                and _stored_has_active_predicate(r["rule_name"], parameters),
+                explained_fills_pct=r["explained_fills_pct"],
+                expected_pnl_or_markout=r["expected_pnl_or_markout"],
+                inventory_impact=r["inventory_impact"],
+                risk_requirements=r["risk_requirements"],
+                blind_spots=r["blind_spots"],
+                fitted_at=r["fitted_at"],
+            )
         )
-        for r in rows
-    ]
+    if promoted_only:
+        return [c for c in candidates if c.promoted]
+    return candidates
 
 
 def fetch_stored_fit_results(session: Session, wallet: str) -> list[FitResult]:
@@ -515,6 +529,10 @@ def fetch_stored_fit_results(session: Session, wallet: str) -> list[FitResult]:
             ),
             None,
         )
+        if rejection_reason is None and not _stored_has_active_predicate(
+            c.rule_name, c.parameters
+        ):
+            rejection_reason = "no_active_predicate"
         results.append(
             FitResult(
                 rule_name=c.rule_name,
