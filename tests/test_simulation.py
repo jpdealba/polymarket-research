@@ -43,6 +43,7 @@ from pmresearch.simulation.engine import (
     PROHIBITED_DECISION_FIELDS,
     RN1_WALLET,
     DecisionContext,
+    _TransientResult,
     run_simulation,
     run_strategy_simulation,
 )
@@ -59,10 +60,22 @@ from pmresearch.simulation.holdout_failure import (
 from pmresearch.simulation.inventory_cycling import (
     InventoryCyclingConfig,
     InventoryLifecycleState,
+    LifecycleMetrics,
     fetch_lifecycle_summary,
     merge_qty_for_condition,
     simulate_inventory_cycling,
     simulate_redeem,
+)
+from pmresearch.simulation.pattern_rules import (
+    PatternMetadata,
+    PatternRuleConfig,
+    TokenPair,
+    _pattern_redeem_directional_audit,
+    event_basket_gate,
+    maybe_merge_batches,
+    rule_a_complement_catchup_order,
+    rule_b_bond_increasing_order,
+    run_pattern_strategy,
 )
 from pmresearch.simulation.report import generate_compare_report, generate_sim_report
 from pmresearch.simulation.risk import RiskLimits
@@ -360,6 +373,41 @@ def _skipped_reasons_for_run(session, run_id: int) -> list[str]:
     return [row.skipped_reason for row in rows]
 
 
+def _pattern_ctx(*, token_id="no", bid="0.55", condition_id="cond_pair", age=5) -> DecisionContext:
+    row = _make_row(
+        1,
+        RN1_WALLET,
+        condition_id=condition_id,
+        token_id=token_id,
+        best_bid_before=bid,
+        best_ask_before=str(Decimal(bid) + Decimal("0.02")),
+        book_before_age_s=age,
+    )
+    return DecisionContext.from_row(row)
+
+
+def _pattern_meta() -> PatternMetadata:
+    return PatternMetadata(
+        token_pairs={
+            "cond_pair": TokenPair("yes", "no"),
+            "cond_two": TokenPair("yes2", "no2"),
+        },
+        condition_events={"cond_pair": "event_a", "cond_two": "event_a"},
+        condition_questions={},
+    )
+
+
+def _state_with_pair(*, yes_qty="10", yes_cost="4", no_qty="0", no_cost="0") -> InventoryLifecycleState:
+    state = InventoryLifecycleState()
+    state.lot("cond_pair", "yes").qty = Decimal(yes_qty)
+    state.lot("cond_pair", "yes").cost = Decimal(yes_cost)
+    state.lot("cond_pair", "yes").mark_price = Decimal("0.40")
+    state.lot("cond_pair", "no").qty = Decimal(no_qty)
+    state.lot("cond_pair", "no").cost = Decimal(no_cost)
+    state.lot("cond_pair", "no").mark_price = Decimal("0.55")
+    return state
+
+
 def test_decision_context_is_allowlist_only():
     row = _make_row(1, GAP_WALLET)
     ctx = DecisionContext.from_row(row)
@@ -379,6 +427,249 @@ def test_scenario_ordering_assumptions_are_strict():
 def test_event_timing_rejected(session):
     with pytest.raises(ValueError, match="event_timing"):
         run_simulation(session, RN1_WALLET, "event_timing", "conservative")
+
+
+def test_pattern_rule_a_requires_opposite_unpaired_inventory():
+    state = _state_with_pair(yes_qty="0", yes_cost="0", no_qty="0", no_cost="0")
+    decision = rule_a_complement_catchup_order(
+        _pattern_ctx(token_id="no"),
+        state,
+        CONSERVATIVE,
+        PatternRuleConfig("pattern_complement_catchup_v1"),
+        _pattern_meta(),
+    )
+
+    assert decision.applies is False
+    assert decision.explanation == "rule_a:no_opposite_unpaired_inventory"
+
+
+def test_pattern_rule_a_quote_price_respects_cost_threshold():
+    state = _state_with_pair(yes_qty="10", yes_cost="4")
+    decision = rule_a_complement_catchup_order(
+        _pattern_ctx(token_id="no", bid="0.70"),
+        state,
+        OPTIMISTIC,
+        PatternRuleConfig("pattern_complement_catchup_v1", max_complete_set_cost=Decimal("0.98")),
+        _pattern_meta(),
+    )
+
+    assert decision.applies is True
+    assert decision.order is not None
+    assert decision.order.order_price == Decimal("0.58")
+
+
+def test_pattern_rule_a_skips_if_combined_cost_exceeds_threshold():
+    state = _state_with_pair(yes_qty="10", yes_cost="9.9")
+    decision = rule_a_complement_catchup_order(
+        _pattern_ctx(token_id="no", bid="0.01"),
+        state,
+        OPTIMISTIC,
+        PatternRuleConfig("pattern_complement_catchup_v1", max_complete_set_cost=Decimal("0.98")),
+        _pattern_meta(),
+    )
+
+    assert decision.applies is False
+    assert decision.explanation == "rule_a:combined_cost_exceeds_threshold"
+
+
+def test_pattern_rule_a_size_limited_by_opposite_unpaired_and_risk_caps():
+    state = _state_with_pair(yes_qty="5", yes_cost="2")
+    decision = rule_a_complement_catchup_order(
+        _pattern_ctx(token_id="no", bid="0.50"),
+        state,
+        OPTIMISTIC,
+        PatternRuleConfig(
+            "pattern_complement_catchup_v1",
+            max_complete_set_cost=Decimal("1.00"),
+            max_order_size=Decimal("100"),
+            max_condition_capital=Decimal("3"),
+        ),
+        _pattern_meta(),
+    )
+
+    assert decision.applies is True
+    assert decision.order is not None
+    assert decision.order.order_size == Decimal("2")
+
+
+def test_pattern_rule_b_only_when_buy_increases_paired_qty():
+    state = _state_with_pair(yes_qty="10", yes_cost="4", no_qty="2", no_cost="1.1")
+    decision = rule_b_bond_increasing_order(
+        _pattern_ctx(token_id="no", bid="0.55"),
+        state,
+        OPTIMISTIC,
+        PatternRuleConfig("pattern_bond_increasing_buy_v1", max_complete_set_cost=Decimal("1.00")),
+        _pattern_meta(),
+    )
+
+    assert decision.applies is True
+    assert decision.order is not None
+    assert decision.order.order_size > Decimal("0")
+
+
+def test_pattern_rule_b_skips_dominant_side_buy():
+    state = _state_with_pair(yes_qty="10", yes_cost="4", no_qty="2", no_cost="1.1")
+    decision = rule_b_bond_increasing_order(
+        _pattern_ctx(token_id="yes", bid="0.40"),
+        state,
+        OPTIMISTIC,
+        PatternRuleConfig("pattern_bond_increasing_buy_v1", max_complete_set_cost=Decimal("1.00")),
+        _pattern_meta(),
+    )
+
+    assert decision.applies is False
+    assert decision.explanation == "rule_b:not_bond_increasing"
+
+
+def test_pattern_rule_d_gate_requires_active_conditions_and_inventory():
+    state = _state_with_pair(yes_qty="10", yes_cost="4")
+    config = PatternRuleConfig("pattern_complement_catchup_with_event_gate_v1", min_active_conditions=2)
+    assert event_basket_gate(_pattern_ctx(), state, config, _pattern_meta()) == "rule_d:min_active_conditions"
+
+    state.lot("cond_two", "yes2").qty = Decimal("1")
+    state.lot("cond_two", "yes2").cost = Decimal("0.50")
+    assert event_basket_gate(_pattern_ctx(), state, config, _pattern_meta()) is None
+
+
+def test_pattern_event_gate_does_not_use_future_sibling_rows():
+    state = _state_with_pair(yes_qty="10", yes_cost="4")
+    config = PatternRuleConfig("pattern_complement_catchup_with_event_gate_v1", min_active_conditions=2)
+    meta = _pattern_meta()
+
+    assert event_basket_gate(_pattern_ctx(), state, config, meta) == "rule_d:min_active_conditions"
+
+
+def test_pattern_merge_uses_current_simulated_paired_inventory_only():
+    state = _state_with_pair(yes_qty="3", yes_cost="1.2", no_qty="2", no_cost="1.1")
+    events = maybe_merge_batches(
+        state,
+        ctx=_pattern_ctx(token_id="no"),
+        config=PatternRuleConfig("pattern_abd_inventory_rule_v1", min_merge_qty=Decimal("1")),
+        metadata=_pattern_meta(),
+        last_merge_ts_by_event={},
+    )
+
+    assert [event["event_type"] for event in events].count("MERGE_SIMULATED") == 1
+    assert state.lot("cond_pair", "yes").qty == Decimal("1")
+    assert state.lot("cond_pair", "no").qty == Decimal("0")
+
+
+def test_pattern_unresolved_inventory_reported_separately(session):
+    _insert_market_metadata(
+        session,
+        condition_id="cond_pair",
+        question="Pair",
+        event_id="event_a",
+        event_title="Event A",
+    )
+    session.execute(
+        text(
+            "INSERT OR REPLACE INTO tokens (token_id, condition_id, outcome_index, outcome_label) "
+            "VALUES ('yes', 'cond_pair', 0, 'YES'), ('no', 'cond_pair', 1, 'NO')"
+        )
+    )
+    session.commit()
+    rows = [
+        _make_row(1, RN1_WALLET, condition_id="cond_pair", token_id="yes", trade_ts=1_000_000, best_bid_before="0.40"),
+        _make_row(2, RN1_WALLET, condition_id="cond_pair", token_id="no", trade_ts=1_000_010, best_bid_before="0.55"),
+    ]
+    _insert_dataset_rows(session, RN1_WALLET, rows)
+    result = run_pattern_strategy(
+        session,
+        rows,
+        OPTIMISTIC,
+        RiskLimits(),
+        strategy_name="pattern_bond_increasing_buy_v1",
+        parameters={"fallback_cost_basis": "last_fill_wac", "max_complete_set_cost": "1.00"},
+    )
+
+    lifecycle = result.lifecycle_metrics
+    assert lifecycle.unresolved_inventory_value >= Decimal("0")
+    assert result.net_pnl == lifecycle.trading_pnl + lifecycle.merge_pnl + lifecycle.redeem_pnl + lifecycle.unresolved_inventory_value
+
+
+def test_pattern_observed_inventory_does_not_pollute_simulated_metrics(session):
+    _insert_market_metadata(
+        session,
+        condition_id="cond_pair",
+        question="Pair",
+        event_id="event_a",
+        event_title="Event A",
+    )
+    session.execute(
+        text(
+            "INSERT OR REPLACE INTO tokens (token_id, condition_id, outcome_index, outcome_label) "
+            "VALUES ('yes', 'cond_pair', 0, 'YES'), ('no', 'cond_pair', 1, 'NO')"
+        )
+    )
+    session.commit()
+    row = _make_row(
+        1,
+        RN1_WALLET,
+        condition_id="cond_pair",
+        token_id="no",
+        best_bid_before="0.55",
+    )
+    row.update(
+        {
+            "yes_token_id": "yes",
+            "no_token_id": "no",
+            "qty_yes_before": "10",
+            "qty_no_before": "0",
+            "wac_yes_before": "0.40",
+            "wac_no_before": "",
+            "event_market_count_active_before": 2,
+            "event_unpaired_inventory_before": "10",
+            "event_bond_qty_before": "0",
+            "event_capital_used_before": "1000000",
+        }
+    )
+
+    result = run_pattern_strategy(
+        session,
+        [row],
+        OPTIMISTIC,
+        RiskLimits(max_position_per_token=Decimal("1")),
+        strategy_name="pattern_abd_inventory_rule_v1",
+        parameters={"max_complete_set_cost": "1.00"},
+    )
+
+    assert result.candidate_signals_count == 1
+    assert result.orders_count == 0
+    assert result.fills_count == 0
+    assert result.risk_prevented_count == 1
+    assert result.skipped_by_reason == {"max_position_per_token": 1}
+    assert result.net_pnl == Decimal("0")
+    assert result.max_drawdown == Decimal("0")
+    assert result.max_inventory == Decimal("0")
+    assert result.capital_required == Decimal("0")
+    assert result.turnover == Decimal("0")
+
+
+def test_pattern_strategy_ordering_violation_detection():
+    conservative = _TransientResult([], [], [], [], {}, [], [], 1, 1, 2, None, Decimal("2"), Decimal("2"), Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"), 0, {}, 0, 0, 0)
+    optimistic = _TransientResult([], [], [], [], {}, [], [], 1, 1, 1, None, Decimal("1"), Decimal("1"), Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"), 0, {}, 0, 0, 0)
+
+    from pmresearch.simulation.engine import _has_ordering_violation
+
+    assert _has_ordering_violation(conservative, optimistic) is True
+
+
+def test_pattern_decision_uses_no_post_fill_or_final_outcome_fields():
+    row = _make_row(1, RN1_WALLET, condition_id="cond_pair", token_id="no", best_bid_before="0.55")
+    row["fill_price"] = "999"
+    row["pnl_at_resolution"] = "999"
+    state = _state_with_pair(yes_qty="10", yes_cost="4")
+    decision = rule_a_complement_catchup_order(
+        DecisionContext.from_row(row),
+        state,
+        OPTIMISTIC,
+        PatternRuleConfig("pattern_complement_catchup_v1", max_complete_set_cost=Decimal("1.00")),
+        _pattern_meta(),
+    )
+
+    assert decision.applies is True
+    assert not (set(decision.features_used) & PROHIBITED_DECISION_FIELDS)
 
 
 def test_run_rn1_completion_set_edge_conservative(session):
@@ -1467,6 +1758,109 @@ def test_inventory_cycling_redeem_values_winner_and_loser():
     assert metrics.redeem_pnl > Decimal("0")
     assert state.lot("cond_res", "winner").qty == Decimal("0")
     assert state.lot("cond_res", "loser").qty == Decimal("0")
+
+
+def test_pattern_redeem_directional_audit_splits_paired_and_unpaired_inventory():
+    result = _TransientResult(
+        orders=[],
+        skipped_orders=[],
+        fills=[
+            {
+                "event_id": "event_a",
+                "condition_id": "cond_pair",
+                "token_id": "yes",
+                "side": "BUY",
+                "fill_price": "0.30",
+                "fill_size": "10",
+                "fill_notional_usdc": "3.0",
+                "estimated_fee": "0.006",
+                "filled_ts": 100,
+                "order_index": 0,
+                "qty_yes_before_sim": "0",
+                "qty_no_before_sim": "0",
+                "qty_yes_after_sim": "10",
+                "qty_no_after_sim": "0",
+                "complete_set_cost_estimate": "",
+            },
+            {
+                "event_id": "event_a",
+                "condition_id": "cond_pair",
+                "token_id": "no",
+                "side": "BUY",
+                "fill_price": "0.60",
+                "fill_size": "4",
+                "fill_notional_usdc": "2.4",
+                "estimated_fee": "0.0048",
+                "filled_ts": 110,
+                "order_index": 1,
+                "qty_yes_before_sim": "10",
+                "qty_no_before_sim": "0",
+                "qty_yes_after_sim": "10",
+                "qty_no_after_sim": "4",
+                "complete_set_cost_estimate": "0.90",
+            },
+        ],
+        inventory=[],
+        daily_pnl={},
+        risk_events=[],
+        market_attribution=[],
+        candidate_signals_count=2,
+        orders_count=2,
+        fills_count=2,
+        fill_rate=Decimal("1"),
+        simulated_pnl=Decimal("-1.4108"),
+        net_pnl=Decimal("-1.4108"),
+        max_drawdown=Decimal("0"),
+        max_inventory=Decimal("10"),
+        capital_required=Decimal("5.4108"),
+        turnover=Decimal("5.4"),
+        skipped_orders_count=0,
+        skipped_by_reason={},
+        risk_prevented_count=0,
+        risk_breaches=0,
+        stale_context_excluded=0,
+    )
+    result.lifecycle_events = [
+        {
+            "ts": 120,
+            "event_type": "REDEEM_SIMULATED",
+            "condition_id": "cond_pair",
+            "token_id": "yes",
+            "qty": "10",
+            "capital_released": "0",
+        },
+        {
+            "ts": 120,
+            "event_type": "REDEEM_SIMULATED",
+            "condition_id": "cond_pair",
+            "token_id": "no",
+            "qty": "4",
+            "capital_released": "4",
+        },
+    ]
+    result.lifecycle_metrics = LifecycleMetrics(
+        redeem_count=2,
+        redeem_pnl=Decimal("-1.4108"),
+        unresolved_inventory_value=Decimal("0"),
+        max_unpaired_inventory=Decimal("10"),
+    )
+    meta = PatternMetadata(
+        token_pairs={"cond_pair": TokenPair("yes", "no")},
+        condition_events={"cond_pair": "event_a"},
+        condition_questions={},
+    )
+
+    audit = _pattern_redeem_directional_audit(result, meta)
+    summary = audit["summary"]
+
+    assert summary["redeem_pnl_residual"] == Decimal("0.0000")
+    assert summary["paired_hedged_pnl"] == Decimal("0.3928")
+    assert summary["unpaired_directional_pnl"] == Decimal("-1.8036")
+    assert summary["winning_side_pnl"] == Decimal("1.5952")
+    assert summary["losing_side_pnl"] == Decimal("-3.0060")
+    assert audit["condition_rows"][0]["complete_set_cost_lt_0_95_pnl"] == Decimal("1.5952")
+    assert audit["condition_rows"][0]["dominance_ratio_before_one_sided_pnl"] == Decimal("1.5952")
+    assert all(row["status"] == "PASS" for row in audit["sanity"])
 
 
 def test_inventory_cycling_auto_merge_disabled_leaves_inventory_unmerged():

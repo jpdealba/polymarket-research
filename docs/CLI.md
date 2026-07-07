@@ -231,9 +231,24 @@ Reglas soportadas:
 | `pmr sim run` | `--wallet TEXT` (requerido); exactamente uno de `--rule TEXT` o `--strategy TEXT`; `--scenario [conservative\|medium\|optimistic]` (requerido); `--max-position FLOAT` (default `500`); `--max-daily-loss FLOAT` (default `100`); `--max-capital FLOAT` (default `5000`) | Ejecuta una simulacion para una wallet/regla o wallet/estrategia/escenario. Persiste `simulation_runs`, `simulation_orders`, `simulation_skipped_orders`, `simulation_fills`, `simulation_inventory`, `simulation_pnl_daily` y `simulation_risk_events`. Muestra ordenes, fills, fill_rate, PnL, drawdown, capital, risk breaches, skips, riesgo prevenido, stale exclusions y gate conservador si aplica. |
 | `pmr sim compare` | `--wallet TEXT` (requerido); exactamente uno de `--rule TEXT` o `--strategy TEXT` | Ejecuta `optimistic`, `medium` y `conservative` y muestra comparacion de supuestos y metricas. Conservative debe ser peor o igual que optimistic; si sale mejor, marca `ordering_violation` y no pasa el gate. |
 | `pmr sim report` | `--wallet TEXT` (requerido); exactamente uno de `--rule TEXT` o `--strategy TEXT`; `--out PATH` (requerido) | Genera reporte Markdown comparativo con PASS/FAIL del gate conservador. Si conservative pierde dinero, rompe riesgo, no tiene fills o viola ordering, la regla/estrategia no avanza a paper trading. |
+| `pmr sim attribution` | `--run-id INT` (requerido); `--by [market\|event]` (requerido) | Muestra atribucion de PnL de un simulation run por mercado o evento: fills, notional, realized/unrealized/total PnL, inventario/exposicion maxima y turnover. |
+| `pmr sim search` | `--wallet TEXT` (requerido); `--rule TEXT` (requerido); `--max-combos INT` (requerido); `--out PATH` (requerido) | Ejecuta busqueda Phase 22.2 con split train/validation/test para combinaciones de parametros de una regla. Escribe reporte Markdown y persiste resultados de search/candidates. |
+| `pmr sim top` | `--wallet TEXT` (requerido); `--rule TEXT` (requerido); `--limit INT` (requerido); `--eligible-only` (flag) | Lista los mejores candidatos de la ultima busqueda para wallet/regla. Con `--eligible-only` filtra a candidatos seleccionados en train+validation que tambien pasan holdout test. |
+| `pmr sim report-search` | `--wallet TEXT` (requerido); `--rule TEXT` (requerido); `--out PATH` (requerido) | Regenera el reporte Markdown de la ultima busqueda Phase 22.2 para wallet/regla. |
 | `pmr sim holdout-failure` | `--wallet TEXT` (requerido); `--rule TEXT` (requerido); `--out-dir PATH` (requerido); `--search-run-id INTEGER` (opcional) | Genera diagnosticos Phase 22.3 para el candidato seleccionado: `holdout_failure_report.md` y CSVs por condition, price bucket, book age, side y time bucket. No re-selecciona parametros con test. |
+| `pmr sim composite-search` | `--out-dir PATH` (requerido); `--wallet TEXT` (default `all`); `--strategy-family [composite\|event_inventory_cycling]` (default `composite`); `--max-components INT` (requerido); `--max-candidates INT` (requerido); `--seed INT` (default `2204`); `--capital-mode [small\|scaled]` (requerido); `--max-capital FLOAT` (requerido); `--max-order-size FLOAT` (requerido); `--min-events INT` (requerido); `--min-fills INT` (requerido) | Ejecuta busqueda progresiva Phase 22.4 de estrategias compuestas. Escribe reporte, candidatos rankeados, top candidates, forward watch, efectividad/contribucion de componentes, PnL por evento, skips y robustez por evento. |
 
 Metricas principales: `candidate_signals_count`, `accepted_orders_count`, `skipped_orders_count`, `simulated_fills_count`, `fill_rate`, `simulated_pnl`, `net_pnl`, `max_drawdown`, `max_inventory`, `capital_required`, `turnover`, `skipped_by_reason`, `risk_prevented_count`, `risk_breaches`, `stale_context_excluded`, `conservative_pass`. `orders_count` se conserva como alias compatible de `accepted_orders_count`.
+
+### patterns (Fase 22.5)
+
+Dataset descriptivo/read-only para entender patrones reales de RN1 / Gap antes de convertirlos en reglas simulables. No corre simulacion, no optimiza parametros y no promueve estrategias. El timing estimado por book se reporta como compatible/estimado, no como atribucion segura al wallet.
+
+| Comando | Parametros | Que hace |
+| --- | --- | --- |
+| `pmr patterns build` | `--wallet TEXT` (requerido); `--out-dir PATH` (requerido); `--event-id TEXT` (opcional); `--watchlist TEXT` (opcional); `--min-context [excellent\|good\|usable\|weak]` (default `usable`); `--lookback-s INT` (default `7200`); `--book-match-tolerance-bps INT` (default `5`); `--include-gap-wallet` (flag) | Genera `order_timing_dataset.csv`, `condition_inventory_timeline.csv`, `pair_completion_report.csv`, `merge_timing_report.csv`, `sibling_market_sequence_report.csv`, `unpaired_inventory_duration_report.csv` y `pattern_mining_summary.md`. Incluye inventario YES/NO before/after, paired/unpaired, costo de complete set, timing de complemento, timing de MERGE, secuencias de mercados hermanos y confianza de order timing. |
+| `pmr patterns report` | `--wallet TEXT` (requerido); `--out-dir PATH` (requerido) | Regenera `pattern_mining_summary.md` desde los CSVs existentes en `--out-dir`. |
+| `pmr patterns export` | `--wallet TEXT` (requerido); `--out PATH` (requerido) | Exporta el dataset principal `order_timing_dataset.csv` a la ruta indicada. Si no existe un build previo en el directorio default junto al output, lo construye. |
 
 ## Flujos comunes
 
@@ -330,4 +345,12 @@ pmr sim top --wallet 0x83255595ba1fadd2e734cb30a0fb8110301a19cc --rule spread_ca
 pmr sim top --wallet 0x83255595ba1fadd2e734cb30a0fb8110301a19cc --rule spread_capture --limit 10 --eligible-only
 pmr sim report-search --wallet 0x83255595ba1fadd2e734cb30a0fb8110301a19cc --rule spread_capture --out /data/exports/search_gap_latest.md
 pmr sim holdout-failure --wallet 0x83255595ba1fadd2e734cb30a0fb8110301a19cc --rule spread_capture --out-dir /data/exports/holdout_failure_gap
+
+# Busqueda compuesta progresiva (Fase 22.4)
+pmr sim composite-search --wallet all --strategy-family composite --max-components 4 --max-candidates 250 --capital-mode small --max-capital 5000 --max-order-size 500 --min-events 3 --min-fills 20 --out-dir /data/exports/composite_search
+
+# Pattern mining descriptivo (Fase 22.5)
+pmr patterns build --wallet 0x2005d16a84ceefa912d4e380cd32e7ff827875ea --out-dir /data/exports/patterns_rn1
+pmr patterns report --wallet 0x2005d16a84ceefa912d4e380cd32e7ff827875ea --out-dir /data/exports/patterns_rn1
+pmr patterns export --wallet 0x2005d16a84ceefa912d4e380cd32e7ff827875ea --out /data/exports/rn1_order_timing_dataset.csv
 ```

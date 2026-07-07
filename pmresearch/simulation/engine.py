@@ -155,6 +155,77 @@ SUPPORTED_STRATEGIES: dict[str, StrategyConfig] = {
             "max_order_size",
         ),
     ),
+    "pattern_complement_catchup_v1": StrategyConfig(
+        strategy_name="pattern_complement_catchup_v1",
+        wallet="*",
+        base_rule="pattern_inventory_rules",
+        version=1,
+        rule_parameters={"max_complete_set_cost": "0.98"},
+        filters={"context_quality": ["excellent", "good", "usable"], "max_book_age_s": 30},
+        execution_policy={"candidate_order_price": "book_before", "risk_gate": "pre_order"},
+        pre_trade_risk_limits=("max_position_per_token", "max_event_exposure", "max_capital_deployed", "max_order_size"),
+    ),
+    "pattern_bond_increasing_buy_v1": StrategyConfig(
+        strategy_name="pattern_bond_increasing_buy_v1",
+        wallet="*",
+        base_rule="pattern_inventory_rules",
+        version=1,
+        rule_parameters={"max_complete_set_cost": "0.98"},
+        filters={"context_quality": ["excellent", "good", "usable"], "max_book_age_s": 30},
+        execution_policy={"candidate_order_price": "book_before", "risk_gate": "pre_order"},
+        pre_trade_risk_limits=("max_position_per_token", "max_event_exposure", "max_capital_deployed", "max_order_size"),
+    ),
+    "pattern_event_basket_gate_v1": StrategyConfig(
+        strategy_name="pattern_event_basket_gate_v1",
+        wallet="*",
+        base_rule="pattern_inventory_rules",
+        version=1,
+        rule_parameters={"min_active_conditions": 2},
+        filters={"context_quality": ["excellent", "good", "usable"], "max_book_age_s": 30},
+        execution_policy={"candidate_order_price": "book_before", "risk_gate": "pre_order"},
+        pre_trade_risk_limits=("max_position_per_token", "max_event_exposure", "max_capital_deployed", "max_order_size"),
+    ),
+    "pattern_complement_catchup_with_event_gate_v1": StrategyConfig(
+        strategy_name="pattern_complement_catchup_with_event_gate_v1",
+        wallet="*",
+        base_rule="pattern_inventory_rules",
+        version=1,
+        rule_parameters={"max_complete_set_cost": "0.98", "min_active_conditions": 2},
+        filters={"context_quality": ["excellent", "good", "usable"], "max_book_age_s": 30},
+        execution_policy={"candidate_order_price": "book_before", "risk_gate": "pre_order"},
+        pre_trade_risk_limits=("max_position_per_token", "max_event_exposure", "max_capital_deployed", "max_order_size"),
+    ),
+    "pattern_bond_increasing_with_event_gate_v1": StrategyConfig(
+        strategy_name="pattern_bond_increasing_with_event_gate_v1",
+        wallet="*",
+        base_rule="pattern_inventory_rules",
+        version=1,
+        rule_parameters={"max_complete_set_cost": "0.98", "min_active_conditions": 2},
+        filters={"context_quality": ["excellent", "good", "usable"], "max_book_age_s": 30},
+        execution_policy={"candidate_order_price": "book_before", "risk_gate": "pre_order"},
+        pre_trade_risk_limits=("max_position_per_token", "max_event_exposure", "max_capital_deployed", "max_order_size"),
+    ),
+    "pattern_abd_inventory_rule_v1": StrategyConfig(
+        strategy_name="pattern_abd_inventory_rule_v1",
+        wallet="*",
+        base_rule="pattern_inventory_rules",
+        version=1,
+        rule_parameters={
+            "max_complete_set_cost": "0.98",
+            "min_active_conditions": 2,
+            "require_bond_increasing_filter": True,
+            "min_merge_qty": "1",
+            "merge_batch_window_s": 300,
+        },
+        filters={"context_quality": ["excellent", "good", "usable"], "max_book_age_s": 30},
+        execution_policy={
+            "candidate_order_price": "book_before",
+            "risk_gate": "pre_order",
+            "auto_merge": True,
+            "recycle_capital": True,
+        },
+        pre_trade_risk_limits=("max_position_per_token", "max_event_exposure", "max_capital_deployed", "max_order_size"),
+    ),
 }
 
 PROHIBITED_DECISION_FIELDS: frozenset[str] = frozenset(
@@ -234,6 +305,10 @@ DECISION_CONTEXT_FIELDS: frozenset[str] = frozenset(
         "bond_before",
         "bond_ratio_before",
         "event_exposure_before",
+        "event_market_count_active_before",
+        "event_unpaired_inventory_before",
+        "event_bond_qty_before",
+        "event_capital_used_before",
         "null_reasons_json",
         "dataset_version",
         "watchlist",
@@ -571,6 +646,17 @@ def run_simulation(
             effective_limits,
             parameters=_rule_parameters(strategy) | effective_limits.to_dict(),
         )
+    elif strategy.base_rule == "pattern_inventory_rules":
+        from .pattern_rules import run_pattern_strategy
+
+        transient = run_pattern_strategy(
+            session,
+            rows,
+            scenario,
+            effective_limits,
+            strategy_name=strategy.strategy_name,
+            parameters=_rule_parameters(strategy) | effective_limits.to_dict(),
+        )
     else:
         transient = _simulate(rows, strategy, scenario, effective_limits)
     ordering_violation = False
@@ -587,6 +673,17 @@ def run_simulation(
                 base_limits,
                 parameters=_rule_parameters(strategy) | base_limits.to_dict(),
             )
+        elif strategy.base_rule == "pattern_inventory_rules":
+            from .pattern_rules import run_pattern_strategy
+
+            optimistic = run_pattern_strategy(
+                session,
+                rows,
+                ALL_SCENARIOS["optimistic"],
+                base_limits,
+                strategy_name=strategy.strategy_name,
+                parameters=_rule_parameters(strategy) | base_limits.to_dict(),
+            )
         else:
             optimistic = _simulate(rows, strategy, ALL_SCENARIOS["optimistic"], base_limits)
         ordering_violation = _has_ordering_violation(transient, optimistic)
@@ -596,6 +693,8 @@ def run_simulation(
             and not ordering_violation
             and transient.fills_count > 0
         )
+        if strategy.base_rule == "pattern_inventory_rules":
+            conservative_pass = False
 
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     meta = SUPPORTED_RULES[rule_name]
@@ -623,6 +722,10 @@ def run_simulation(
         from .inventory_cycling import insert_lifecycle_outputs
 
         insert_lifecycle_outputs(session, run_id, transient)
+    elif strategy.base_rule == "pattern_inventory_rules":
+        from .pattern_rules import insert_pattern_lifecycle_outputs
+
+        insert_pattern_lifecycle_outputs(session, run_id, transient)
     insert_run_attribution(session, run_id, transient.market_attribution)
     session.commit()
 
@@ -694,6 +797,17 @@ def run_strategy_simulation(
             effective_limits,
             parameters=_rule_parameters(strategy) | effective_limits.to_dict(),
         )
+    elif strategy.base_rule == "pattern_inventory_rules":
+        from .pattern_rules import run_pattern_strategy
+
+        transient = run_pattern_strategy(
+            session,
+            rows,
+            scenario,
+            effective_limits,
+            strategy_name=strategy.strategy_name,
+            parameters=_rule_parameters(strategy) | effective_limits.to_dict(),
+        )
     else:
         transient = _simulate(rows, strategy, scenario, effective_limits)
     ordering_violation = False
@@ -710,6 +824,17 @@ def run_strategy_simulation(
                 base_limits,
                 parameters=_rule_parameters(strategy) | base_limits.to_dict(),
             )
+        elif strategy.base_rule == "pattern_inventory_rules":
+            from .pattern_rules import run_pattern_strategy
+
+            optimistic = run_pattern_strategy(
+                session,
+                rows,
+                ALL_SCENARIOS["optimistic"],
+                base_limits,
+                strategy_name=strategy.strategy_name,
+                parameters=_rule_parameters(strategy) | base_limits.to_dict(),
+            )
         else:
             optimistic = _simulate(rows, strategy, ALL_SCENARIOS["optimistic"], base_limits)
         ordering_violation = _has_ordering_violation(transient, optimistic)
@@ -719,6 +844,8 @@ def run_strategy_simulation(
             and not ordering_violation
             and transient.fills_count > 0
         )
+        if strategy.base_rule == "pattern_inventory_rules":
+            conservative_pass = False
 
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     run_id = _insert_run(
@@ -745,6 +872,10 @@ def run_strategy_simulation(
         from .inventory_cycling import insert_lifecycle_outputs
 
         insert_lifecycle_outputs(session, run_id, transient)
+    elif strategy.base_rule == "pattern_inventory_rules":
+        from .pattern_rules import insert_pattern_lifecycle_outputs
+
+        insert_pattern_lifecycle_outputs(session, run_id, transient)
     insert_run_attribution(session, run_id, transient.market_attribution)
     session.commit()
 
@@ -1115,7 +1246,10 @@ def _decide_rule_order(strategy: StrategyConfig, ctx: DecisionContext, scenario:
 
 
 def _rule_parameters(strategy: StrategyConfig) -> dict[str, object]:
-    params = dict(SUPPORTED_RULES[strategy.base_rule]["parameters"])
+    if strategy.base_rule == "pattern_inventory_rules":
+        params: dict[str, object] = {}
+    else:
+        params = dict(SUPPORTED_RULES[strategy.base_rule]["parameters"])
     params.update(strategy.rule_parameters)
     return params
 

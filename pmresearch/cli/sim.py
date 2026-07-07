@@ -38,6 +38,7 @@ from ..simulation.holdout_failure import (
     TIME_BUCKET_FILENAME,
     write_holdout_failure_outputs,
 )
+from ..simulation.pattern_rules import is_pattern_strategy, write_pattern_strategy_outputs
 from ..simulation.inventory_cycling import fetch_lifecycle_summary
 from ..simulation.report import generate_compare_report
 from ..simulation.risk import RiskLimits
@@ -183,6 +184,35 @@ def sim_compare(wallet: str, rule_name: str | None, strategy_name: str | None) -
             session.close()
 
     click.echo(generate_compare_report(results))
+    if strategy_name and is_pattern_strategy(strategy_name):
+        session = get_session_factory(settings)()
+        try:
+            paths = write_pattern_strategy_outputs(
+                session,
+                wallet=wallet,
+                strategy_name=strategy_name,
+            )
+        finally:
+            session.close()
+        click.echo(f"wrote {paths['report']}")
+        click.echo(f"wrote {paths['candidates']}")
+        click.echo(f"wrote {paths['event_robustness']}")
+        click.echo(f"wrote {paths['risk_events']}")
+        click.echo(f"wrote {paths['parameter_grid']}")
+        click.echo(f"wrote {paths['holdout']}")
+        click.echo(f"wrote {paths['signal_diagnostics_report']}")
+        click.echo(f"wrote {paths['signal_diagnostics']}")
+        click.echo(f"wrote {paths['signal_sample_failures']}")
+        click.echo(f"wrote {paths['pnl_attribution_report']}")
+        click.echo(f"wrote {paths['pnl_attribution_by_event']}")
+        click.echo(f"wrote {paths['pnl_attribution_by_condition']}")
+        click.echo(f"wrote {paths['fill_ledger_sample']}")
+        click.echo(f"wrote {paths['strategy_sanity_checks']}")
+        click.echo(f"wrote {paths['redeem_directional_attribution_report']}")
+        click.echo(f"wrote {paths['redeem_attribution_by_event']}")
+        click.echo(f"wrote {paths['redeem_attribution_by_condition']}")
+        click.echo(f"wrote {paths['redeem_attribution_by_token']}")
+        click.echo(f"wrote {paths['directional_inventory_timeline']}")
 
 
 @sim_group.command("report")
@@ -218,6 +248,18 @@ def sim_report(wallet: str, rule_name: str | None, strategy_name: str | None, ou
             session.close()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(report, encoding="utf-8")
+    if strategy_name and is_pattern_strategy(strategy_name):
+        session = get_session_factory(settings)()
+        try:
+            write_pattern_strategy_outputs(
+                session,
+                wallet=wallet,
+                strategy_name=strategy_name,
+                out_dir=out_path.parent,
+                report_path=out_path,
+            )
+        finally:
+            session.close()
     click.echo(f"report written to {out_path}")
 
 
